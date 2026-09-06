@@ -4,4 +4,6 @@ package configs
 type BrowserConfig struct {
 	Headless, Stealth, NoSandbox bool
 	BinPath, Proxy, UserAgent    string
+	// Service-owned persistent directory; empty uses a temporary incognito test session.
+	ProfileDir string
 }
