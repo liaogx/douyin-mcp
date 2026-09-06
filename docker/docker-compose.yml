@@ -1,0 +1,19 @@
+services:
+  douyin-mcp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "127.0.0.1:18070:18070"
+    volumes:
+      - private-data:/app/data
+      - ../media:/app/media:ro
+    shm_size: "1gb"
+    environment:
+      DY_HEADLESS: "true"
+      DY_STEALTH: "false"
+      DY_NO_SANDBOX: "false"
+    stop_grace_period: 20s
+
+volumes:
+  private-data:
