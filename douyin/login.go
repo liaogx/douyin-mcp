@@ -173,7 +173,7 @@ func (s *LoginService) GetLoginQRCode(ctx context.Context) (*LoginResult, error)
 				return false, err
 			}
 			if el != nil {
-				if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+				if err := browser.Click(el); err != nil {
 					return false, err
 				}
 				clickedQR = true
@@ -186,7 +186,7 @@ func (s *LoginService) GetLoginQRCode(ctx context.Context) (*LoginResult, error)
 				return false, err
 			}
 			if el != nil {
-				if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+				if err := browser.Click(el); err != nil {
 					return false, err
 				}
 				clickedLogin = true
@@ -199,7 +199,7 @@ func (s *LoginService) GetLoginQRCode(ctx context.Context) (*LoginResult, error)
 	}
 	// Screenshot the rendered QR element: works for img, canvas and remote URLs,
 	// and never fetches an arbitrary image URL from the server.
-	png, err := qr.Screenshot(proto.PageCaptureScreenshotFormatPng, 100)
+	png, err := browser.ScreenshotPNG(qr)
 	if err != nil {
 		return nil, err
 	}
