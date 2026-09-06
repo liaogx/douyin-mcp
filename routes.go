@@ -51,17 +51,18 @@ func SetupRoutes(service Operations, mcpHandler http.Handler) http.Handler {
 	})
 	mux.Handle("/mcp", mcpHandler)
 	mux.HandleFunc("GET /api/v1/login/status", func(w http.ResponseWriter, r *http.Request) {
-		result, err := service.CheckLoginStatus(r.Context())
+		result, err := loginForSurface(r.Context(), service, douyin.LoginRequest{Surface: r.URL.Query().Get("surface")}, false)
 		writeResult(w, result, err)
 	})
 	mux.HandleFunc("POST /api/v1/login/qrcode", func(w http.ResponseWriter, r *http.Request) {
+		var args douyin.LoginRequest
 		if r.ContentLength != 0 {
-			if err := decodeJSON(r, new(struct{})); err != nil {
+			if err := decodeJSON(r, &args); err != nil {
 				writeResult(w, nil, err)
 				return
 			}
 		}
-		result, err := service.GetLoginQRCode(r.Context())
+		result, err := loginForSurface(r.Context(), service, args, true)
 		writeResult(w, result, err)
 	})
 	mux.HandleFunc("DELETE /api/v1/cookies", func(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +83,9 @@ func SetupRoutes(service Operations, mcpHandler http.Handler) http.Handler {
 			result, err := call(r.Context(), &req)
 			writeResult(w, result, err)
 		})
+	}
+	if web, ok := service.(WebOperations); ok {
+		addWebRoutes(mux, web)
 	}
 	return mux
 }

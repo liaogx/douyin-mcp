@@ -9,8 +9,10 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
 	"github.com/liaogx/douyin-mcp/configs"
+	"github.com/liaogx/douyin-mcp/internal/securefile"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 )
@@ -55,9 +57,16 @@ func New(c configs.BrowserConfig) (*DouyinBrowser, error) {
 			return nil, errors.New("代理仅支持不含账号密码的 http/https/socks5 地址")
 		}
 	}
-	profile, err := os.MkdirTemp("", "douyin-mcp-browser-*")
-	if err != nil {
-		return nil, err
+	profile := c.ProfileDir
+	if profile == "" {
+		profile, err = os.MkdirTemp("", "douyin-mcp-browser-*")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if err := ownedProfile(profile); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	l := launcher.New().Context(ctx).Bin(bin).UserDataDir(profile).Headless(c.Headless).NoSandbox(c.NoSandbox).Leakless(false)
@@ -67,14 +76,20 @@ func New(c configs.BrowserConfig) (*DouyinBrowser, error) {
 	endpoint, err := l.Launch()
 	if err != nil {
 		cancel()
-		os.RemoveAll(profile)
+		if c.ProfileDir == "" {
+			os.RemoveAll(profile)
+		}
 		return nil, errors.New("专用浏览器启动失败，请检查浏览器路径和沙箱环境")
 	}
 	b := &DouyinBrowser{launcher: l, config: c, cancel: cancel}
-	b.root = rod.New().ControlURL(endpoint)
+	b.root = rod.New().Context(ctx).ControlURL(endpoint)
 	if err := b.root.Connect(); err != nil {
 		b.Close()
 		return nil, errors.New("无法连接专用浏览器")
+	}
+	if c.ProfileDir != "" {
+		b.session = b.root
+		return b, nil
 	}
 	if err := b.Reset(context.Background()); err != nil {
 		b.Close()
@@ -83,9 +98,28 @@ func New(c configs.BrowserConfig) (*DouyinBrowser, error) {
 	return b, nil
 }
 
-// Reset disposes the whole incognito context, not just its cookie backup.
+// Reset disposes the dedicated persistent profile (or temporary incognito
+// context in tests), not just its cookie backup.
 // It does not revoke remote sessions or affect the user's normal Chrome.
 func (b *DouyinBrowser) Reset(ctx context.Context) error {
+	if b.config.ProfileDir != "" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c := b.config
+		if err := b.Close(); err != nil {
+			return err
+		}
+		if err := ClearProfile(c.ProfileDir); err != nil {
+			return err
+		}
+		fresh, err := New(c)
+		if err != nil {
+			return err
+		}
+		*b = *fresh
+		return nil
+	}
 	if b.session != nil {
 		err := b.session.Context(ctx).Close()
 		b.session = nil
@@ -105,10 +139,34 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 	if b.session == nil {
 		return nil, errors.New("浏览器会话不可用，请重启服务")
 	}
-	p, err := b.session.Context(ctx).Page(proto.TargetCreateTarget{URL: "about:blank"})
+	// A retained tab's event watcher must live as long as the browser, not the
+	// HTTP request that created it. p.Context(background) alone does NOT detach
+	// rod's underlying session watcher from the original request context.
+	targetInfo, err := (proto.TargetCreateTarget{URL: "about:blank", BrowserContextID: b.session.BrowserContextID}).Call(b.session.Context(ctx))
 	if err != nil {
+		return nil, fmt.Errorf("创建专用标签页失败: %w", err)
+	}
+	// Bound attachment by this request without making the retained session's
+	// watcher a child of it. Detach the cancellation hook once setup succeeds.
+	pageCtx, cancelPage := context.WithCancel(b.session.GetContext())
+	stopRequest := context.AfterFunc(ctx, cancelPage)
+	p, err := b.session.Context(pageCtx).PageFromTarget(targetInfo.TargetID)
+	detached := stopRequest()
+	if err == nil && (!detached || ctx.Err() != nil) {
+		err = ctx.Err()
+		if err == nil {
+			err = context.Canceled
+		}
+	}
+	if err != nil {
+		cancelPage()
+		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, _ = (proto.TargetCloseTarget{TargetID: targetInfo.TargetID}).Call(b.session.Context(cleanup))
 		return nil, err
 	}
+	context.AfterFunc(p.GetContext(), cancelPage)
+	p = p.Context(ctx)
 	ok := false
 	defer func() {
 		if !ok {
@@ -126,12 +184,12 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 		}
 	}
 	if err := p.Navigate(target); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("页面导航失败: %w", err)
 	}
 	// Creator is an SPA; waiting for every third-party image/analytics resource
 	// can hang despite an interactive login form. Business selectors poll below.
 	if err := p.Wait(rod.Eval(`() => document.readyState === 'interactive' || document.readyState === 'complete'`)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("等待页面可交互超时: %w", err)
 	}
 	ok = true
 	return p.Context(context.Background()), nil
@@ -166,10 +224,61 @@ func (b *DouyinBrowser) Close() error {
 	}
 	if b.launcher != nil {
 		b.launcher.Kill()
-		b.launcher.Cleanup()
+		if b.config.ProfileDir == "" {
+			b.launcher.Cleanup()
+		}
 	}
 	if b.cancel != nil {
 		b.cancel()
 	}
 	return err
+}
+
+func ownedProfile(dir string) error {
+	// Never accept a daily Chrome directory or a broad path as a reset target.
+	if !filepath.IsAbs(dir) || filepath.Base(dir) != "browser-profile" {
+		return errors.New("浏览器资料必须是私有数据目录中的 browser-profile 子目录")
+	}
+	marker := filepath.Join(dir, ".douyin-mcp-owned")
+	if info, err := os.Lstat(dir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("专用浏览器资料目录无效")
+		}
+		data, err := securefile.Read(marker, 128)
+		if err != nil {
+			return err
+		}
+		if string(data) != "douyin-mcp dedicated browser profile\n" {
+			return errors.New("拒绝接管未标记的浏览器资料目录")
+		}
+		return os.Chmod(dir, 0700)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return securefile.Write(marker, []byte("douyin-mcp dedicated browser profile\n"))
+}
+
+// ClearProfile can log out a stopped service without launching Chrome. Refuse
+// unowned or still-running profiles, including a leftover singleton lock that
+// needs human inspection after a crash. Never touch a daily Chrome profile.
+func ClearProfile(dir string) error {
+	if !filepath.IsAbs(dir) || filepath.Base(dir) != "browser-profile" {
+		return errors.New("拒绝删除非专用浏览器资料目录")
+	}
+	if _, err := os.Lstat(dir); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := ownedProfile(dir); err != nil {
+		return err
+	}
+	for _, name := range []string{"SingletonLock", "SingletonSocket"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+			return errors.New("浏览器资料仍被锁定，请先关闭本工具的专用 Chrome 再清除登录")
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return os.RemoveAll(dir)
 }

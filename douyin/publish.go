@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/proto"
 	"github.com/liaogx/douyin-mcp/browser"
 	"github.com/liaogx/douyin-mcp/internal/securefile"
 	"os"
@@ -214,7 +213,7 @@ func (s *PublishService) confirm(ctx context.Context, kind, id string) (*Publish
 		return nil, err
 	}
 	d.attempted = true
-	if err := button.Click(proto.InputMouseButtonLeft, 1); err != nil {
+	if err := browser.Click(button); err != nil {
 		return s.uncertain(d, err)
 	}
 	verifyCtx, verifyCancel := context.WithTimeout(ctx, 45*time.Second)

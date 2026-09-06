@@ -29,6 +29,7 @@ type DouyinService struct {
 	browser   *browser.DouyinBrowser
 	login     *douyin.LoginService
 	publisher *douyin.PublishService
+	web       *douyin.WebService
 }
 
 func NewDouyinService(c configs.Config) *DouyinService {
@@ -43,7 +44,7 @@ func (s *DouyinService) begin(ctx context.Context) (context.Context, func(), err
 	select {
 	case s.gate <- struct{}{}:
 	default:
-		return nil, nil, &douyin.Error{Code: "busy", Message: "另一个登录或发布操作正在进行，请稍后重试", Status: 409}
+		return nil, nil, &douyin.Error{Code: "busy", Message: "另一个浏览器操作正在进行，请稍后重试", Status: 409}
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.config.OperationTimeout)
 	stop := context.AfterFunc(s.ctx, cancel)
@@ -55,18 +56,17 @@ func (s *DouyinService) ensure(ctx context.Context) error {
 		return nil
 	}
 	c := s.config
-	br, err := browser.New(configs.BrowserConfig{Headless: c.Headless, Stealth: c.Stealth, NoSandbox: c.NoSandbox, BinPath: c.BinPath, Proxy: c.Proxy, UserAgent: c.UserAgent})
+	br, err := browser.New(configs.BrowserConfig{Headless: c.Headless, Stealth: c.Stealth, NoSandbox: c.NoSandbox, BinPath: c.BinPath, Proxy: c.Proxy, UserAgent: c.UserAgent, ProfileDir: filepath.Join(c.DataDir, "browser-profile")})
 	if err != nil {
 		return err
 	}
 	login := douyin.NewLoginServiceWithBrowser(br, cookies.NewFileCookiesWithPath(filepath.Join(c.DataDir, "cookies.json")))
-	if err := login.Restore(ctx); err != nil {
-		br.Close()
-		return err
-	}
+	// The dedicated Chrome profile retains device-bound session state. Do not
+	// overwrite newer profile cookies with an older JSON backup on startup.
 	s.browser = br
 	s.login = login
 	s.publisher = douyin.NewPublishService(br, login, c.MediaRoot, c.DataDir)
+	s.web = douyin.NewWebService(br, login, c.MediaRoot, c.DataDir)
 	return nil
 }
 
@@ -99,9 +99,13 @@ func (s *DouyinService) DeleteCookies(ctx context.Context) error {
 	}
 	defer done()
 	if s.browser == nil {
+		if err := browser.ClearProfile(filepath.Join(s.config.DataDir, "browser-profile")); err != nil {
+			return err
+		}
 		return cookies.NewFileCookiesWithPath(filepath.Join(s.config.DataDir, "cookies.json")).Delete()
 	}
 	s.publisher.Close()
+	s.web.Close()
 	return s.login.DeleteCookies(ctx)
 }
 func (s *DouyinService) publish(ctx context.Context, req *douyin.PublishRequest, video bool) (*douyin.PublishResult, error) {
@@ -135,6 +139,9 @@ func (s *DouyinService) Close() error {
 	defer func() { <-s.gate }()
 	if s.publisher != nil {
 		s.publisher.Close()
+	}
+	if s.web != nil {
+		s.web.Close()
 	}
 	if s.login != nil {
 		s.login.Close()

@@ -161,8 +161,8 @@ func TestMCPModernDiscoveryAndLegacyInitialization(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools/list failed: %v", list)
 	}
-	if tools, ok := result["tools"].([]any); !ok || len(tools) != 5 {
-		t.Fatalf("expected exactly five tools: %v", result)
+	if tools, ok := result["tools"].([]any); !ok || len(tools) != 17 {
+		t.Fatalf("expected exactly seventeen tools: %v", result)
 	}
 	b, _ = json.Marshal(list)
 	for _, forbidden := range []string{"sms_code", "phone_number", "search_video", "like_video", "schedule_at"} {

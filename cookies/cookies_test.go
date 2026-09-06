@@ -10,6 +10,7 @@ func TestCookieRoundTripAndDomainFilter(t *testing.T) {
 	items := []*proto.NetworkCookie{
 		{Name: "sessionid", Value: "synthetic", Domain: ".douyin.com", Path: "/", Secure: true, HTTPOnly: true, Session: true, SameSite: proto.NetworkCookieSameSiteLax},
 		{Name: "unrelated", Value: "not-saved", Domain: "example.com"},
+		{Name: "", Value: "nameless-web-cookie", Domain: "www.douyin.com"},
 	}
 	b, err := Encode(items)
 	if err != nil {
@@ -21,6 +22,13 @@ func TestCookieRoundTripAndDomainFilter(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Name != "sessionid" || !got[0].HTTPOnly || got[0].SameSite != proto.NetworkCookieSameSiteLax {
 		t.Fatalf("unexpected roundtrip: %+v", got)
+	}
+}
+
+func TestOldBackupSkipsNamelessCookieWithoutLosingLogin(t *testing.T) {
+	got, err := Decode([]byte(`[{"name":"","value":"synthetic","domain":"www.douyin.com"},{"name":"sessionid","value":"synthetic","domain":".douyin.com"}]`), time.Now())
+	if err != nil || len(got) != 1 || got[0].Name != "sessionid" {
+		t.Fatal("valid session lost due to nameless cookie", err)
 	}
 }
 

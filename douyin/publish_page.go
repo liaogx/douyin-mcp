@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/proto"
+	"github.com/liaogx/douyin-mcp/browser"
 	"strings"
 	"time"
 )
@@ -72,7 +72,7 @@ func openUpload(ctx context.Context, page *rod.Page, kind string, paths []string
 				return false, err
 			}
 			if tab != nil {
-				if err := tab.Click(proto.InputMouseButtonLeft, 1); err != nil {
+				if err := browser.Click(tab); err != nil {
 					return false, err
 				}
 				clicked = true
@@ -119,10 +119,10 @@ func fillMetadata(ctx context.Context, page *rod.Page, req *PublishRequest) erro
 	if err != nil {
 		return wrapTimeout(err, "上传后未出现标题和正文编辑框")
 	}
-	if err := title.SelectAllText(); err != nil {
+	if err := browser.SelectAllText(title); err != nil {
 		return err
 	}
-	if err := title.Input(req.Title); err != nil {
+	if err := browser.InputText(title, req.Title); err != nil {
 		return err
 	}
 	if _, err := body.Eval(`() => {
@@ -134,12 +134,12 @@ func fillMetadata(ctx context.Context, page *rod.Page, req *PublishRequest) erro
 		return err
 	}
 	if req.Description != "" {
-		if err := body.Input(req.Description); err != nil {
+		if err := browser.InputText(body, req.Description); err != nil {
 			return err
 		}
 	} else {
 		// Input("") does not delete an existing selection.
-		if err := body.Type(input.Backspace); err != nil {
+		if err := browser.PressKey(body, input.Backspace); err != nil {
 			return err
 		}
 	}

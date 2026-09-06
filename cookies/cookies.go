@@ -29,7 +29,7 @@ func AllowedDomain(domain string) bool {
 func Encode(items []*proto.NetworkCookie) ([]byte, error) {
 	params := make([]*proto.NetworkCookieParam, 0, len(items))
 	for _, c := range items {
-		if c == nil || !AllowedDomain(c.Domain) {
+		if c == nil || !AllowedDomain(c.Domain) || c.Name == "" {
 			continue
 		}
 		p := &proto.NetworkCookieParam{Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path, Secure: c.Secure, HTTPOnly: c.HTTPOnly, SameSite: c.SameSite}
@@ -51,8 +51,13 @@ func Decode(data []byte, now time.Time) ([]*proto.NetworkCookieParam, error) {
 	}
 	result := make([]*proto.NetworkCookieParam, 0, len(items))
 	for _, c := range items {
-		if c == nil || !AllowedDomain(c.Domain) || c.Name == "" {
-			return nil, fmt.Errorf("登录凭证包含不允许的域名或空名称")
+		if c == nil || !AllowedDomain(c.Domain) {
+			return nil, fmt.Errorf("登录凭证包含不允许的域名或无效条目")
+		}
+		// The live website can create a nameless non-session cookie. Skip it,
+		// including in older backups, without discarding valid login cookies.
+		if c.Name == "" {
+			continue
 		}
 		if c.Expires > 0 && float64(c.Expires) <= float64(now.Unix()) {
 			continue
