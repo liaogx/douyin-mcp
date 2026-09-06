@@ -1,0 +1,31 @@
+# Private runtime state and original media
+/data/
+/media/
+cookies.json
+api-token
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Build, diagnostics and local workspaces
+/douyin-mcp
+/dist/
+/bin/
+/vendor/
+*.exe
+*.test
+*.out
+go.work
+go.work.sum
+*.log
+*.mp4
+*.mov
+*.jpg
+*.jpeg
+*.png
+*.webp
+.DS_Store
+.idea/
+.vscode/
