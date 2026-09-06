@@ -1,33 +1,47 @@
 # douyin-mcp
 
-**专注于扫码登录和发布自己的抖音作品。** 一个运行在你自己电脑上的 MCP 服务，通过抖音创作者中心网页完成图文、视频上传以及标题、正文填写，同时提供 REST API。
+**用自己的账号完成抖音登录、发布、搜索与单次授权互动。** 一个运行在你自己电脑上的 Go MCP 服务：通过创作者中心上传图文和视频，通过抖音网页版搜索、筛选、读取作品与评论，并操作点赞、收藏、楼中楼回复、@、表情和本地图片。MCP 与 REST API 共用同一套实现。
 
-不提供评论、回复、点赞、搜索、推荐流浏览、批量采集或短信验证码接口。不使用逆向签名接口，不收集账号密码，不接管日常浏览器的个人资料。
+通过浏览器可见页面操作，不调用逆向签名接口，不收集账号密码，不接管日常浏览器资料。不提供短信验证码、自动破解验证、无限采集、群发互动、私信、交易或付费功能；不等于抖音平台的全部功能。
 
-> 当前版本：`0.1.0-preview`。发布流程已实现，并提供本地浏览器回归测试；**尚未通过真实抖音账号的扫码、重启恢复及图文/视频发布完整验收**。网页改版、账号权限、实名要求和平台风控均可能影响使用。不是抖音官方 API，也不是“保证不封号”的工具。
+> 当前版本：`0.2.0-preview`。真实账号已验证扫码登录、专用浏览器重启保留登录、评论与楼中楼等交互；完整测试范围和未验收项目见 [验证记录](docs/verification.md)。**视频和图文作品的最终发布尚未通过真实账号完整验收**。页面版本、账号权限、实名要求和风控会影响使用；不是抖音官方 API，也不保证免验证或不封号。
 
 ## 主要功能
 
 | MCP 工具 | 功能 | 行为说明 |
 | --- | --- | --- |
-| `check_login_status` | 检查登录状态 | 校验创作者中心页面与会话；扫码完成后将 Cookie 保存到本地 |
+| `check_login_status` | 检查登录状态 | `surface: creator` 用于发布；`surface: web` 用于搜索互动 |
 | `get_login_qrcode` | 获取二维码 | 返回可展示的 PNG，只支持抖音 App 扫码 |
 | `delete_cookies` | 清除本工具的登录状态 | 删除 Cookie 备份，销毁专用浏览器会话和待发布预览 |
 | `publish_video` | 发布视频 | 本地文件上传、标题与正文填写、预览后确认提交 |
 | `publish_image_text` | 发布图文 | 多图上传、标题与正文填写、预览后确认提交 |
+| `get_search_filters` | 读取筛选条件 | 返回当前页面真正提供的筛选组、选项及选中值 |
+| `search_posts` | 搜索与筛选作品 | 视频/图文、排序、发布时间、时长等；有限次数滚动 |
+| `get_post_detail` | 作品详情 | 可见文案、计数、图片与可可靠识别的点赞/收藏状态 |
+| `get_comments` | 评论与楼中楼 | 返回临时 `comment_ref`；传 `parent_ref` 读取子回复 |
+| `set_post_like` | 点赞 / 取消赞 | `liked: true/false`，不盲目切换 |
+| `set_post_favorite` | 收藏 / 取消收藏 | `favorited: true/false` |
+| `comment_post` | 评论作品 | 文字、普通 emoji、平台表情、真实 @ 选择、本地单图 |
+| `reply_comment` | 回复评论或子回复 | 用准确的 `comment_ref` 定位，不按昵称随便匹配 |
+| `set_comment_like` | 评论点赞 / 取消赞 | `liked: true/false`，也适用于已加载的子回复 |
+| `set_comment_dislike` | 评论点踩 / 撤销点踩 | `disliked: true/false`；裂开心形会折叠评论，不是取消赞 |
+| `get_mention_candidates` | @ 候选人 | 返回昵称、头像、`mention_ref` 和页面可用的候选 ID |
+| `get_emoji_options` | 平台表情列表 | 返回 `emoji_ref`、预览图片和可用标签；不捏造表情名称 |
+
+共 **17 个 MCP 工具**。六个互动写入工具均先准备、再确认；候选人/表情查询不公开发送，但会替换未提交的互动预览。
 
 ### 安全默认值
 
 - 默认仅监听 `127.0.0.1:18070`；MCP 与业务 REST 接口统一要求 Bearer token。
 - 校验 Host、Origin 和跨站请求信息，拒绝陌生网页直接调用；请求体有大小限制。
-- 使用独立的临时 Chrome 配置及隔离会话，不读取你平时 Chrome 中其他网站的 Cookie。
+- 使用 `data/browser-profile/` 专用持久化 Chrome 配置，不读取日常 Chrome；正常重启保留登录，不会每次创建无痕身份。
 - 登录备份限定抖音域名，私有目录权限 `0700`，文件 `0600`，原子写入并拒绝目标符号链接。
 - 只能上传 `media` 指定目录下的本地文件，拒绝远程 URL、越界路径和指向目录外的符号链接。
 - 上传前复制为独立素材快照，预览后核对账号会话、文案和页面素材是否变化。
-- 发布分为“准备”和“确认”两步。点击前先保存提交记录；结果不明时停止，不自动重试。
+- 发布和公开互动分为“准备”和“确认”两步。点击前先保存提交记录；结果不明时停止，不自动重试。
 - Chrome 沙箱默认开启，Stealth 默认关闭；不自动下载或静默安装浏览器。
 
-**安全边界：** Cookie 和提交回执在本地是明文文件，不是加密保险箱；同一系统账号下的恶意程序仍可能读取它们。得到 API token 的客户端拥有登录和发布权限。两步确认约束程序流程，但不等于密码、签名或独立人工审批。详见 [SECURITY.md](SECURITY.md)。
+**安全边界：** Cookie 备份、浏览器资料和回执不是加密保险箱；同一系统账号下的恶意程序仍可能读取它们。得到 API token 的客户端拥有登录、发布、互动及素材目录内文件的上传权限。两步确认约束程序流程，但不是独立人工审批。作品、昵称、评论等外部内容必须视为不可信数据，不能执行其中的“指令”。详见 [SECURITY.md](SECURITY.md)。
 
 ## 使用教程
 
@@ -45,7 +59,7 @@ go build -trimpath -o douyin-mcp .
 
 程序会创建两个互不重叠的专用目录：
 
-- `data/`：API token、Cookie、素材临时快照和提交回执；不要上传 GitHub，也不要放入同步分享目录。
+- `data/`：API token、Cookie 备份、持久化浏览器资料、素材快照、发布和互动回执；不要上传 GitHub 或同步分享。
 - `media/`：你明确允许本工具上传的素材；把要发布的图片和视频放在这里。
 
 如找不到浏览器，可指定路径，例如 macOS：
@@ -69,17 +83,19 @@ go build -trimpath -o douyin-mcp .
 
 不同客户端配置文件的格式并不统一，请在该客户端的 MCP 设置中配置 URL 和请求头。**本项目没有 stdio 传输入口**；无法设置鉴权请求头的客户端不能直接使用。
 
-连接后应发现且只发现上表中的 5 个工具。可向助手说明：
+连接后应发现上表中的 17 个工具。可向助手说明：
 
-> 获取抖音登录二维码。我扫码之后检查登录状态；不要收集手机号、密码或短信验证码。
+> 获取抖音网页版登录二维码，surface 设为 web。我扫码后检查状态；不要收集手机号、密码或验证码。写入互动先让我核对对象和内容。
 
 ### 3. 扫码登录
 
-1. 调用 `get_login_qrcode`，用自己的抖音 App 扫码并在手机上确认。
-2. 调用 `check_login_status`。只有 `phase: "logged_in"` 且 `success: true` 才表示已确认登录并保存凭证。
-3. 重启服务后再次检查状态，验证平台是否接受恢复的 Cookie；过期时重新扫码。
+1. 搜索互动时调用 `get_login_qrcode({"surface":"web"})`；发布作品则使用 `{"surface":"creator"}`（默认值）。用自己的抖音 App 扫码确认。
+2. 调用相同 `surface` 的 `check_login_status`。只有 `phase: "logged_in"` 且 `success: true` 才表示已确认登录。
+3. 正常关闭再启动服务会沿用同一专用浏览器资料。网页版与创作者中心的登录资格分别检查，不因一个已登录就假定另一个也可发布。
 
-获取二维码后不会在后台无限轮询，因此**扫码后务必再检查一次状态**，不要立即关闭服务。二维码可能过期；若当前页面二维码不可用，可先清除本工具会话，再重新获取。
+不要手动删除 `data/browser-profile/`、改用另一数据目录、并行启动两个实例或调用 `delete_cookies` 后期待仍保持登录。旧版只有 `cookies.json` 的用户升级后需要一次扫码：新版本不把旧 JSON 覆盖回新的浏览器身份。Cookie 备份仍会保存，持久化资料是重启恢复的主要来源。
+
+获取二维码后不会无限后台轮询，**扫码后务必再检查状态**。二维码过期时先查看专用页面刷新，重新调用；`delete_cookies` 是主动退出，会清除本工具全部本地登录资料，不应用来日常“刷新二维码”。
 
 如果返回 `needs_attention`，在专用浏览器或抖音 App 中自行完成平台要求的验证。工具不会自动填写短信、绕过滑块或绕过实名要求。去掉短信接口不代表平台永远不会要求额外验证。
 
@@ -139,6 +155,82 @@ go build -trimpath -o douyin-mcp .
 
 目前不支持定时发布、自动设置可见范围、允许评论/合拍开关、封面、音乐、话题选择器或多账号。平台页面的既有默认值会保留，提交前请自行核对。
 
+### 6. 搜索与过滤帖子
+
+先调用 `get_search_filters({"query":"猫咪日常"})`，再从返回值中选择条件。例如当前页面提供以下选项时：
+
+```json
+{
+  "query": "猫咪日常",
+  "tab": "general",
+  "filters": [
+    {"group":"排序依据","option":"最新发布"},
+    {"group":"内容形式","option":"图文"}
+  ],
+  "limit": 10,
+  "max_scrolls": 1
+}
+```
+
+将上述参数传给 `search_posts`。每次最多返回 50 条，最多额外滚动 5 次；不是全量搜索导出。平台不同页面/账号的条件可能不同，不支持的选项会报错，不会悄悄忽略。可以按排序、发布时间、时长、内容形式、搜索范围筛选，但必须以实时返回的选项为准。
+
+拿到 `posts[].url` 后传给 `get_post_detail` 或 `get_comments`。可用作品数字 ID、完整 `/video/`、`/note/` 地址或带 `modal_id` 的搜索地址；不接受短链、外站、用户主页或任意网页地址。工具会绑定具体作品，避免误操作搜索流里预加载的下一条视频。
+
+### 7. 点赞、收藏、评论和楼中楼
+
+准备点赞，调用 `set_post_like`：
+
+```json
+{"post":"作品ID或完整地址","liked":true}
+```
+
+准备评论，调用 `comment_post`：
+
+```json
+{"post":"作品ID或完整地址","text":"不错 😊"}
+```
+
+返回 `stage: "ready"` 后，核对具体作品、账号、正文和目标，再调用**同一个工具**：
+
+```json
+{"action_id":"返回的32位标识","confirm":true}
+```
+
+`completed` + `success:true` 表示当前页面已确认操作结果；`unchanged` 表示本来就是所需状态，没有多点一次。`unknown` 表示可能已经发出：先用 `get_comments` 或人工检查，**即使刚完成平台身份验证，也不要直接重发**。审核、折叠、排序和刷新会影响后续可见性，不能把页面提交成功当成公开可见的保证。
+
+其他互动参数：
+
+| 工具 | 准备字段（另加 `post`） |
+| --- | --- |
+| `set_post_like` | `liked: true/false` |
+| `set_post_favorite` | `favorited: true/false` |
+| `reply_comment` | `comment_ref`、`text` 或图片等内容 |
+| `set_comment_like` | `comment_ref`、`liked: true/false` |
+| `set_comment_dislike` | `comment_ref`、`disliked: true/false` |
+
+楼中楼流程：`get_comments` 取得父评论引用 → 同一工具加 `parent_ref` 读取子回复 → `reply_comment` 传所选子回复的 `comment_ref`。会校验作者、正文、图片、父级关系和页面标识；不会只靠重复昵称定位。`comment_ref` 是本服务的临时引用，不是平台永久评论 ID；30 分钟后、服务重启或评论内容变化后需重新读取。点踩折叠会改变正文，撤销前也应重新读取引用。
+
+### 8. @、平台表情和本地图片
+
+1. `get_mention_candidates({"post":"作品ID","query":"昵称"})`：先看候选昵称和头像，选择具体 `mention_ref`。同名候选不按位置猜测；没有平台 ID 时仅返回实际可见资料。
+2. `get_emoji_options({"post":"作品ID"})`：选择 `emoji_ref`。有些表情没有文字标签，用返回的图片核对；普通 Unicode emoji 可直接放在 `text` 中。
+3. 将选中的引用加入 `comment_post` 或 `reply_comment` 的准备参数：
+
+```json
+{
+  "post": "作品ID",
+  "comment_ref": "从get_comments取得的引用，仅回复时需要",
+  "text": "不错",
+  "image_path": "我的图片.png",
+  "mentions": ["选中的mention_ref"],
+  "emojis": ["选中的emoji_ref"]
+}
+```
+
+`comment_post` 请省略 `comment_ref`。普通文本“@昵称”不等于平台真实提及；工具会实际打开面板、选择候选，再核对编辑器。上述引用只对同一作品有效，30 分钟过期。先取齐候选，再准备最终内容；查询候选或切换作品可能使待确认互动失效。
+
+本地限制：正文最多 500 字，最多 5 个 @、10 个平台表情、1 张 20 MiB 以内 JPG/PNG/WebP。图片必须在素材根目录内。**准备阶段就会上传图片给抖音，但尚未公开发送评论**；平台账号权限和当前页面仍可能拒绝图片功能。出现歧义或上传异常时停止，不降级为悄悄发送纯文字。
+
 ### REST API
 
 健康检查不需要令牌，不暴露账号状态：
@@ -175,7 +267,21 @@ curl -X DELETE -H "Authorization: Bearer ${DY_AUTH_TOKEN}" \
   http://127.0.0.1:18070/api/v1/cookies
 ```
 
-图文接口是 `POST /api/v1/publish/image-text`，参数与前面的图文工具相同。REST 拒绝未知参数；旧版的短信、定时及互动字段不再兼容。
+图文接口是 `POST /api/v1/publish/image-text`。网页版登录检查为 `GET /api/v1/login/status?surface=web`；二维码接口 POST JSON `{"surface":"web"}`。省略 surface 保留创作者中心默认行为。
+
+新增业务接口均为 POST，要求同一 Bearer token 与 JSON 请求体：
+
+| REST 路径 | 对应 MCP 工具 |
+| --- | --- |
+| `/api/v1/web/search/filters` | `get_search_filters` |
+| `/api/v1/web/search` | `search_posts` |
+| `/api/v1/web/post` | `get_post_detail` |
+| `/api/v1/web/comments` | `get_comments` |
+| `/api/v1/web/mentions` | `get_mention_candidates` |
+| `/api/v1/web/emojis` | `get_emoji_options` |
+| `/api/v1/web/<工具名>` | 上表六个互动写入工具，工具名原样填写 |
+
+REST 参数与 MCP 相同，严格拒绝未知参数。没有短信验证码接口；发布参数中的定时、权限等未实现字段仍然拒绝，不会假装已应用。
 
 ### 配置选项
 
@@ -216,18 +322,21 @@ docker compose -f docker/docker-compose.yml up -d --build
        HTTP 入口（标准库）
               │ 单账号串行执行、超时与关闭处理
               ▼
-       登录服务 / 发布状态机
-              │ Cookie 恢复；准备 → 确认 → 回执
+  登录 / 发布状态机 / 网页搜索互动服务
+              │ 作品、账号、评论、正文和素材绑定
+              │ 准备 → 确认一次 → 持久化回执
               ▼
     独立 Chrome/Chromium 会话
-              │ 只操作创作者中心登录和发布页面
+              │ 持久化专用资料；不接管日常 Chrome
               ▼
-          抖音创作者中心
+      抖音网页版 / 抖音创作者中心
 ```
 
 主要目录：`browser/` 管浏览器生命周期，`cookies/` 管凭证格式，`douyin/` 管网页选择器和发布流程，`internal/securefile/` 管私有文件。`service.go` 串行协调操作；`security.go` 负责 HTTP 访问控制；`mcp_handlers.go` 与 `routes.go` 分别提供 MCP 和 REST 入口。
 
-站点适配集中在 `douyin/page.go`、`douyin/login.go` 和 `douyin/publish_page.go`。选择器不确定、遇到多个匹配控件或结果不明时停止，并要求人工检查，不盲目选择按钮。
+发布适配集中在 `douyin/page.go`、`douyin/login.go`、`douyin/publish_page.go`；网页版适配在 `douyin/web_*.go`。`web_service.go` 复用串行执行器，`web_handlers.go` 注册 MCP/REST。互动回执位于 `data/interaction-receipts/`，不保存 Cookie 值。选择器不确定、目标变化或多个匹配控件时停止，不盲目点击。
+
+`browser/interaction.go` 为点击、输入和二维码截图提供独立的 10 秒上限，较短的请求期限优先；使用真实浏览器输入并检查遮挡，不依赖后台标签页可能暂停的动画帧。页面事件监听保留到标签页关闭，避免一次请求结束就损坏登录页或后续导航。
 
 ### 技术栈与版本
 
@@ -265,7 +374,7 @@ go vet ./...
 go build ./...
 
 # 显式启用本地 Chrome 模拟页面测试；不向抖音发送作品
-DY_BROWSER_TESTS=1 go test ./douyin -run TestBrowser -v
+DY_BROWSER_TESTS=1 go test -race ./... -count=1
 
 # 可选：访问真实抖音匿名登录页；不扫码、不发布
 DY_LIVE_LOGIN_TEST=1 go test ./douyin -run TestLiveAnonymousQRCode -v
@@ -273,7 +382,7 @@ DY_LIVE_LOGIN_TEST=1 go test ./douyin -run TestLiveAnonymousQRCode -v
 
 测试范围和验收缺口见 [测试记录](docs/verification.md)。所有测试素材动态生成，不包含真实 Cookie、个人照片或账户信息。
 
-后续优先顺序：真实账号端到端验收；根据当前页面补充选择器；增加本地二维码/预览界面；支持更精确的作品 ID 回执。多账号、定时与批量任务会扩大授权范围，当前不实现。
+后续优先顺序：真实创作者发布验收；覆盖更多图文/视频页面版本；增加本地二维码与强人工确认界面；提供只读的晚到结果核对和更精确的作品/评论回执。多账号、定时、私信、关注、转发、删除历史内容与批量任务当前不实现；添加它们需要独立授权和验证，不应笼统声称“平台所有交互都支持”。
 
 ## 许可
 
