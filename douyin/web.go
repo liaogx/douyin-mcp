@@ -19,6 +19,7 @@ type WebService struct {
 	loginPage, searchPage, detailPage *rod.Page
 	searchKey, detailID               string
 	searchFilterKey                   string
+	searchSubmitted                   bool
 	refs                              map[string]commentTarget
 	mentionRefs                       map[string]mentionTarget
 	emojiRefs                         map[string]emojiTarget
@@ -37,6 +38,7 @@ func (s *WebService) Close() {
 	s.loginPage, s.searchPage, s.detailPage = nil, nil, nil
 	s.searchKey, s.detailID = "", ""
 	s.searchFilterKey = ""
+	s.searchSubmitted = false
 	s.refs = map[string]commentTarget{}
 	s.mentionRefs = map[string]mentionTarget{}
 	s.emojiRefs = map[string]emojiTarget{}

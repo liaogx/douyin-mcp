@@ -2,6 +2,19 @@ package douyin
 
 import "testing"
 
+func TestWebSearchPathMatchesPublicRouteVariants(t *testing.T) {
+	for _, path := range []string{"/search/合成测试", "/jingxuan/search/合成测试", "/user/self/search/合成测试", "/search/合成测试/"} {
+		if !isSearchPath(path, "合成测试") {
+			t.Fatalf("supported search route rejected: %s", path)
+		}
+	}
+	for _, path := range []string{"/user/other/search/合成测试", "/search/另一个词", "/video/123"} {
+		if isSearchPath(path, "合成测试") {
+			t.Fatalf("wrong search route accepted: %s", path)
+		}
+	}
+}
+
 func TestWebPostURLBoundary(t *testing.T) {
 	for _, raw := range []string{"7648320240313828858", "https://www.douyin.com/note/7648320240313828858", "https://www.douyin.com/video/7648320240313828858?share=1", "https://www.douyin.com/jingxuan/search/深圳找对象?modal_id=7648320240313828858&type=general&aid=tracking"} {
 		id, target, err := normalizePost(raw)

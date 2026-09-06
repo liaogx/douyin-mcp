@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,8 +23,8 @@ const webFixtureHTML = `<!doctype html><meta charset="utf-8"><style>[hidden]{dis
 <div class="o2tLobnl" data-e2e="video-share-icon-container"><div tabindex="0" aria-describedby="share-tip">分享</div><span>2</span></div></div><span data-e2e="detail-video-publish-time">发布时间：2026-09-06</span></div>
 <div id="comment-input-container"><a href="https://www.douyin.com/user/local-actor"><img></a></div><div data-e2e="comment-list"></div></div>
 <div role="tooltip" id="like-tip" hidden></div><div role="tooltip" id="favorite-tip" hidden></div>
-<div id="search-toolbar-container"><input data-e2e="searchbar-input"><div><div>排序依据</div><span data-index1="0" data-index2="0" class="sDNqBVWH" onclick="filter(this)">综合排序</span><span data-index1="0" data-index2="1" onclick="filter(this)">最新发布</span></div></div>
-<div id="search-result-container"><div id="waterFallScrollContainer"><div id="waterfall_item_7665228646013364602"><div class="search-result-card">图文<br>123<br>测试作品<br>@测试作者<br>·今天</div></div><div id="waterfall_item_7665228646013364603">相关搜索，不是作品</div></div></div>
+<div id="search-toolbar-container"><input data-e2e="searchbar-input"><button data-e2e="searchbar-button" onclick="history.replaceState(null,'','/search/'+encodeURIComponent(document.querySelector('[data-e2e=searchbar-input]').value)+'?type=general')">搜索</button><div><div>排序依据</div><span data-index1="0" data-index2="0" class="sDNqBVWH" onclick="filter(this)">综合排序</span><span data-index1="0" data-index2="1" onclick="filter(this)">最新发布</span></div></div>
+<div id="search-result-container"><div id="waterFallScrollContainer"><div id="waterfall_item_7665228646013364602"><div class="search-result-card">图文<br>123<br>测试作品<br>@测试作者<br>·今天</div></div><div id="waterfall_item_7665228646013364603">相关搜索，不是作品</div><div id="waterfall_item_7665228646013364604"><div class="search-result-card">相关搜索<br><a href="/video/7665228646013364605">推荐词，不是作品</a></div></div></div></div>
 <script>
 window.submissions=0;window.showSuccess=true;window.reactions={like:false,favorite:false};let nextID=100;
 function tip(kind){const e=document.getElementById(kind+'-tip');e.hidden=false;e.textContent=(reactions[kind]?'取消':'')+(kind==='like'?'点赞':'收藏');}
@@ -81,6 +82,220 @@ func TestWebBrowserSearchAndNestedReferences(t *testing.T) {
 	}
 	if len(children.Comments) != 1 || children.Comments[0].Text != "子评论" || children.Comments[0].ParentRef != comments.Comments[0].Ref {
 		t.Fatalf("bad child refs: %+v", children)
+	}
+}
+
+func TestWebBrowserFilterMenuReopensAfterHydrationAndClicks(t *testing.T) {
+	const html = `<!doctype html><meta charset="utf-8"><style>
+[hidden]{display:none!important} #filters{padding:15px} #filters span{display:inline-block;padding:8px}
+</style><header id="douyin-header"><a href="/user/self"><img alt="local account"></a></header>
+<div id="search-toolbar-container"><input id="searchbar-input"><button data-e2e="searchbar-button" onclick="history.replaceState(null,'','/search/'+encodeURIComponent(document.querySelector('#searchbar-input').value)+'?type=general')">搜索</button><span id="trigger" onmouseenter="openMenu()">筛选</span>
+<div id="filters" hidden><div><div>发布时间</div><span class="sDNqBVWH" onclick="choose(this)">不限</span><span onclick="choose(this)">一天内</span><span onclick="choose(this)">一周内</span></div>
+<div><div>搜索范围</div><span class="sDNqBVWH" onclick="choose(this)">不限</span><span onclick="choose(this)">关注的人</span><span onclick="choose(this)">最近看过</span><span onclick="choose(this)">还未看过</span></div></div></div>
+<div id="search-result-container"><p>暂无搜索结果</p></div>
+<script>window.menuOpens=0;window.filterClicks=[];
+function openMenu(){menuOpens++;document.querySelector('#filters').hidden=false;if(menuOpens===1)setTimeout(()=>document.querySelector('#filters').hidden=true,100);}
+function choose(e){filterClicks.push(e.textContent);for(const x of e.parentElement.querySelectorAll('span'))x.classList.remove('sDNqBVWH');e.classList.add('sDNqBVWH');document.querySelector('#filters').hidden=true;}
+</script>`
+	br, ctx := newFixture(t, html)
+	s := NewWebService(br, nil, t.TempDir(), t.TempDir())
+	t.Cleanup(s.Close)
+	p, err := s.openSearch(ctx, &SearchRequest{Query: "本地筛选回归测试"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := openFilters(ctx, p)
+	if err != nil || len(groups) != 2 {
+		t.Fatalf("menu did not recover after transient close: %v %+v", err, groups)
+	}
+	choices := []FilterChoice{{Group: "发布时间", Option: "一天内"}, {Group: "搜索范围", Option: "还未看过"}}
+	if err := applyFilters(ctx, p, choices); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.Eval(`()=>({opens:window.menuOpens,clicks:window.filterClicks})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Opens  int      `json:"opens"`
+		Clicks []string `json:"clicks"`
+	}
+	if err := got.Value.Unmarshal(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Opens < 4 || len(result.Clicks) != 2 || result.Clicks[0] != "一天内" || result.Clicks[1] != "还未看过" {
+		t.Fatalf("unexpected menu/filter interactions: %+v", result)
+	}
+}
+
+func TestWebBrowserSearchUsesButtonAndRejectsServerError(t *testing.T) {
+	for _, mode := range []string{"ready", "server_error", "service_error", "challenge"} {
+		t.Run(mode, func(t *testing.T) {
+			s, br, ctx := webFixture(t)
+			br.html += `<script>window.searchClicks=0;
+const button=document.querySelector('[data-e2e="searchbar-button"]'),base=button.onclick;
+button.onclick=function(){searchClicks++;base.call(this);
+if('` + mode + `'==='server_error')document.querySelector('#search-result-container').innerHTML='<div>服务器异常，请稍后再试</div>';
+if('` + mode + `'==='service_error')document.querySelector('#search-result-container').innerHTML='<div>服务出现异常</div>';
+if('` + mode + `'==='challenge'){const d=document.createElement('div');d.id='uc-second-verify';d.innerHTML='<div class="second-verify-panel">请完成安全验证</div>';document.body.append(d);}
+};</script>`
+			r, err := s.SearchPosts(ctx, &SearchRequest{Query: "合成关键词"})
+			if mode == "server_error" || mode == "service_error" {
+				if err == nil || r != nil || !strings.Contains(err.Error(), "服务器或网络异常") {
+					t.Fatalf("server error must not become empty success: %+v %v", r, err)
+				}
+			} else if mode == "challenge" {
+				if err == nil || r != nil {
+					t.Fatal("challenge was not preserved")
+				}
+				if _, err := s.searchPage.Context(ctx).Eval(`()=>document.querySelector('#uc-second-verify').remove()`); err != nil {
+					t.Fatal(err)
+				}
+				r, err = s.SearchPosts(ctx, &SearchRequest{Query: "合成关键词"})
+				if err != nil || len(r.Posts) != 1 {
+					t.Fatalf("resume failed: %+v %v", r, err)
+				}
+			} else if err != nil || len(r.Posts) != 1 {
+				t.Fatalf("normal UI search failed: %+v %v", r, err)
+			}
+			count, err := s.searchPage.Context(ctx).Eval(`()=>window.searchClicks`)
+			want := 1
+			if mode == "server_error" || mode == "service_error" {
+				want = 2 // At most one recovery, never a retry loop.
+			}
+			if err != nil || count.Value.Int() != want {
+				t.Fatalf("expected %d search-button clicks, got %v: %v", want, count, err)
+			}
+		})
+	}
+}
+
+func TestWebBrowserSearchRecoveryReappliesFilters(t *testing.T) {
+	s, br, ctx := webFixture(t)
+	br.html += `<script>
+window.searchClicks=0;window.filterClicks=0;
+const result=document.querySelector('#search-result-container'),original=result.innerHTML;
+const button=document.querySelector('[data-e2e="searchbar-button"]'),base=button.onclick;
+button.onclick=function(){searchClicks++;base.call(this);result.innerHTML=original;filter(document.querySelector('[data-index2="0"]'));};
+const latest=document.querySelector('[data-index2="1"]');
+latest.onclick=function(){filterClicks++;filter(this);if(filterClicks===1)result.innerHTML='<div>服务出现异常</div>';};
+</script>`
+	r, err := s.SearchPosts(ctx, &SearchRequest{Query: "合成恢复测试", Filters: []FilterChoice{{Group: "排序依据", Option: "最新发布"}}})
+	if err != nil || r == nil || len(r.Posts) != 1 || !strings.Contains(r.Message, "恢复一次") {
+		t.Fatalf("bounded recovery failed: %+v %v", r, err)
+	}
+	value, err := s.searchPage.Context(ctx).Eval(`()=>({search:searchClicks,filter:filterClicks,selected:document.querySelector('[data-index2="1"]').classList.contains('sDNqBVWH')})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Search, Filter int
+		Selected       bool
+	}
+	if err := value.Value.Unmarshal(&state); err != nil || state.Search != 2 || state.Filter != 2 || !state.Selected {
+		t.Fatalf("recovery lost filters or clicked too many times: %+v %v", state, err)
+	}
+}
+
+func TestWebBrowserSearchReusesPageAcrossQueriesAndFilters(t *testing.T) {
+	s, br, ctx := webFixture(t)
+	br.html += `<script>window.searchClicks=0;
+const button=document.querySelector('[data-e2e="searchbar-button"]'),base=button.onclick;
+button.onclick=function(){searchClicks++;base.call(this);filter(document.querySelector('[data-index2="0"]'));};
+</script>`
+	for i, r := range []*SearchRequest{
+		{Query: "合成关键词甲"},
+		{Query: "合成关键词乙"},
+		{Query: "合成关键词乙", Filters: []FilterChoice{{Group: "排序依据", Option: "最新发布"}}},
+	} {
+		result, err := s.SearchPosts(ctx, r)
+		if err != nil || len(result.Posts) != 1 {
+			t.Fatalf("search %d failed: %+v %v", i, result, err)
+		}
+		value, err := s.searchPage.Context(ctx).Eval(`()=>window.searchClicks`)
+		if err != nil || value.Value.Int() != i+1 {
+			t.Fatalf("page was recreated or not submitted: %v %v", value, err)
+		}
+	}
+}
+
+func TestWebBrowserFilterStopsOnDelayedServerError(t *testing.T) {
+	s, br, ctx := webFixture(t)
+	br.html += `<script>
+window.filterClicks=0;
+const result=document.querySelector('#search-result-container');
+document.querySelector('[data-index2="1"]').onclick=function(){
+ filterClicks++;filter(this);result.setAttribute('aria-busy','true');
+ setTimeout(()=>{result.removeAttribute('aria-busy');result.innerHTML='<div>服务出现异常</div>';},500);
+};
+</script>`
+	p, err := s.openSearch(ctx, &SearchRequest{Query: "合成分步筛选"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = applyFilters(ctx, p, []FilterChoice{{Group: "排序依据", Option: "最新发布"}, {Group: "排序依据", Option: "综合排序"}})
+	if !isSearchServerError(err) || !strings.Contains(err.Error(), "排序依据：最新发布") {
+		t.Fatalf("missing exact failed filter: %v", err)
+	}
+	value, e := p.Eval(`()=>({clicks:filterClicks,selected:document.querySelector('[data-index2="1"]').classList.contains('sDNqBVWH')})`)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var state struct {
+		Clicks   int
+		Selected bool
+	}
+	if e := value.Value.Unmarshal(&state); e != nil || state.Clicks != 1 || !state.Selected {
+		t.Fatalf("continued filtering after failure: %+v %v", state, e)
+	}
+}
+
+func TestWebBrowserFilterReacquiresElementReplacedOnHover(t *testing.T) {
+	s, br, ctx := webFixture(t)
+	br.html += `<script>
+window.filterClicks=0;
+const latest=document.querySelector('[data-index2="1"]');
+latest.setAttribute('onclick','filterClicks++;filter(this)');
+latest.onmouseenter=function(){const fresh=this.cloneNode(true);this.replaceWith(fresh);};
+</script>`
+	r, err := s.SearchPosts(ctx, &SearchRequest{Query: "合成菜单替换", Filters: []FilterChoice{{Group: "排序依据", Option: "最新发布"}}})
+	if err != nil || r == nil || len(r.Posts) != 1 {
+		t.Fatalf("filter replacement did not recover: %+v %v", r, err)
+	}
+	value, err := s.searchPage.Context(ctx).Eval(`()=>filterClicks`)
+	if err != nil || value.Value.Int() != 1 {
+		t.Fatalf("filter was submitted more than once: %v %v", value, err)
+	}
+}
+
+func TestWebBrowserSearchDetectsResetFilters(t *testing.T) {
+	s, _, ctx := webFixture(t)
+	p, err := s.openSearch(ctx, &SearchRequest{Query: "筛选完整性测试"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	choices := []FilterChoice{{Group: "排序依据", Option: "最新发布"}}
+	if err := applyFilters(ctx, p, choices); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySearchFilters(ctx, p, choices); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Eval(`()=>filter(document.querySelector('[data-index2="0"]'))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySearchFilters(ctx, p, choices); err == nil {
+		t.Fatal("reset filter was reported as applied")
+	}
+}
+
+func TestWebBrowserJingxuanFilterSelection(t *testing.T) {
+	s, br, ctx := webFixture(t)
+	br.html = strings.ReplaceAll(br.html, "sDNqBVWH", "HjptjtzN")
+	br.html = strings.ReplaceAll(br.html, "'/search/'", "'/jingxuan/search/'")
+	r, err := s.SearchPosts(ctx, &SearchRequest{Query: "合成图文", Filters: []FilterChoice{{Group: "排序依据", Option: "最新发布"}}})
+	if err != nil || r == nil || len(r.Posts) != 1 {
+		t.Fatalf("jingxuan filter state not verified: %+v %v", r, err)
 	}
 }
 
