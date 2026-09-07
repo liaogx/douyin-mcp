@@ -369,11 +369,15 @@ func (s *WebService) confirmInteraction(ctx context.Context, kind, id string) (*
 			return nil, err
 		}
 	} else {
+		if d.target == nil && s.pendingReactions[d.kind] {
+			return nil, problem("interaction_unknown", "当前页面仍有未确认的反应状态；不能把临时变色当作已完成，也不会再次点击", 409)
+		}
 		state, err := s.reactionState(p, d, false)
 		if err != nil {
 			return nil, err
 		}
 		if *state == desiredReaction(d) {
+			d.result.Verification = "page_state"
 			return s.completeInteraction(d, "unchanged", "当前已经是所需状态，没有重复点击")
 		}
 		if d.target != nil {
@@ -388,32 +392,43 @@ func (s *WebService) confirmInteraction(ctx context.Context, kind, id string) (*
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	ack, err := observeActionAck(ctx, p, d)
+	if err != nil {
+		return nil, err
+	}
+	if ack != nil {
+		defer ack.stop()
+	}
 	d.result.Stage = "submitting"
 	if err := s.interactionJournal(d.result); err != nil {
 		d.result.Stage = "ready"
 		return nil, err
 	}
 	d.attempted = true
+	if !isComment && d.target == nil {
+		if s.pendingReactions == nil {
+			s.pendingReactions = map[string]bool{}
+		}
+		s.pendingReactions[d.kind] = true
+	}
+	ack.arm()
 	if err := clickOnce(button); err != nil {
 		return s.uncertainInteraction(d, err)
 	}
 	limited, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if isComment {
-		err = verifyCommentSent(limited, p.Context(limited), d, before)
-	} else {
-		err = poll(limited, 300*time.Millisecond, func() (bool, error) {
-			state, err := s.reactionState(p.Context(limited), d, true)
-			if err != nil {
-				return false, err
-			}
-			return state != nil && *state == desiredReaction(d), nil
-		})
-	}
+	err = s.verifyInteractionResult(limited, p.Context(limited), d, before, ack)
 	if err != nil {
 		return s.uncertainInteraction(d, err)
 	}
-	return s.completeInteraction(d, "completed", "抖音页面已确认操作结果；同一 action_id 再次确认只返回回执，不会重复操作。评论可见性仍由平台审核决定。")
+	if !isComment && d.target == nil {
+		delete(s.pendingReactions, d.kind)
+	}
+	message := "当前页面已确认操作结果；同一 action_id 再次确认只返回回执，不会重复操作。评论可见性仍由平台审核决定。"
+	if d.result.Verification == "platform_response" {
+		message = "本次提交的业务成功响应已确认（不只检查 HTTP 200），未重新打开作品。不会重复操作；评论可见性仍由平台审核决定。"
+	}
+	return s.completeInteraction(d, "completed", message)
 }
 
 func (s *WebService) completeInteraction(d *interactionDraft, stage, message string) (*InteractionResult, error) {
@@ -428,38 +443,33 @@ func (s *WebService) completeInteraction(d *interactionDraft, stage, message str
 	return d.result, nil
 }
 
-func verifyCommentSent(ctx context.Context, p *rod.Page, d *interactionDraft, before []commentRecord) error {
+func commentSentOnPage(p *rod.Page, d *interactionDraft, before []commentRecord) (bool, error) {
 	seen := map[string]bool{}
 	for _, r := range before {
 		seen[r.DOMKey] = true
 	}
-	return poll(ctx, 300*time.Millisecond, func() (bool, error) {
-		if err := verifyPost(p, d.postID); err != nil {
-			return false, err
+	rows, err := readCommentRecords(p, d.postID)
+	if err != nil {
+		return false, err
+	}
+	for _, row := range rows {
+		if seen[row.DOMKey] || row.AuthorURL != d.actorURL || normalizedText(row.Text) != normalizedText(d.result.Text) {
+			continue
 		}
-		rows, err := readCommentRecords(p, d.postID)
-		if err != nil {
-			return false, err
+		if d.target == nil && row.ParentKey != "" {
+			continue
 		}
-		for _, row := range rows {
-			if seen[row.DOMKey] || row.AuthorURL != d.actorURL || normalizedText(row.Text) != normalizedText(d.result.Text) {
-				continue
-			}
-			if d.target == nil && row.ParentKey != "" {
-				continue
-			}
-			if d.target != nil && row.ParentKey != d.target.DOMKey && (d.target.ParentDOMKey == "" || row.ParentKey != d.target.ParentDOMKey) {
-				continue
-			}
-			if d.media != nil && len(row.Images) == 0 {
-				continue
-			}
-			return true, nil
+		if d.target != nil && row.ParentKey != d.target.DOMKey && (d.target.ParentDOMKey == "" || row.ParentKey != d.target.ParentDOMKey) {
+			continue
 		}
-		// Generic or old success toasts, a cleared editor, and changed counts
-		// are not evidence. If moderation hides the new row, return unknown.
-		return false, nil
-	})
+		if d.media != nil && len(row.Images) == 0 {
+			continue
+		}
+		return true, nil
+	}
+	// Generic or old success toasts, a cleared editor, and changed counts
+	// are not evidence. If moderation hides the new row, return unknown.
+	return false, nil
 }
 
 func (s *WebService) closeInteraction() {

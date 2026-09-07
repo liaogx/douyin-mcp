@@ -43,6 +43,7 @@ func (s *WebService) openPost(ctx context.Context, raw string) (*rod.Page, strin
 	browser.ClosePage(s.detailPage)
 	s.detailPage = nil
 	s.detailID = ""
+	s.pendingReactions = nil
 	p, err := s.browser.NewPage(ctx, target)
 	if err != nil {
 		return nil, "", err

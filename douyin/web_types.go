@@ -120,22 +120,24 @@ type InteractionRequest struct {
 }
 
 type InteractionResult struct {
-	Success   bool               `json:"success"`
-	Stage     string             `json:"stage"`
-	ActionID  string             `json:"action_id"`
-	Kind      string             `json:"kind"`
-	PostID    string             `json:"post_id"`
-	PostURL   string             `json:"post_url"`
-	Target    *Comment           `json:"target_comment,omitempty"`
-	Text      string             `json:"text,omitempty"`
-	ImageName string             `json:"image_name,omitempty"`
-	Liked     *bool              `json:"liked,omitempty"`
-	Favorited *bool              `json:"favorited,omitempty"`
-	Disliked  *bool              `json:"disliked,omitempty"`
-	Mentions  []MentionCandidate `json:"mentions,omitempty"`
-	Emojis    []string           `json:"emojis,omitempty"`
-	ExpiresAt *time.Time         `json:"expires_at,omitempty"`
-	Message   string             `json:"message"`
+	Verification string             `json:"verification,omitempty"`
+	CommentID    string             `json:"platform_comment_id,omitempty"`
+	Success      bool               `json:"success"`
+	Stage        string             `json:"stage"`
+	ActionID     string             `json:"action_id"`
+	Kind         string             `json:"kind"`
+	PostID       string             `json:"post_id"`
+	PostURL      string             `json:"post_url"`
+	Target       *Comment           `json:"target_comment,omitempty"`
+	Text         string             `json:"text,omitempty"`
+	ImageName    string             `json:"image_name,omitempty"`
+	Liked        *bool              `json:"liked,omitempty"`
+	Favorited    *bool              `json:"favorited,omitempty"`
+	Disliked     *bool              `json:"disliked,omitempty"`
+	Mentions     []MentionCandidate `json:"mentions,omitempty"`
+	Emojis       []string           `json:"emojis,omitempty"`
+	ExpiresAt    *time.Time         `json:"expires_at,omitempty"`
+	Message      string             `json:"message"`
 }
 
 type MentionRequest struct {

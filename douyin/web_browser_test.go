@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/liaogx/douyin-mcp/cookies"
 )
@@ -28,7 +29,8 @@ const webFixtureHTML = `<!doctype html><meta charset="utf-8"><style>[hidden]{dis
 <script>
 window.submissions=0;window.showSuccess=true;window.reactions={like:false,favorite:false};let nextID=100;
 function tip(kind){const e=document.getElementById(kind+'-tip');e.hidden=false;e.textContent=(reactions[kind]?'取消':'')+(kind==='like'?'点赞':'收藏');}
-function react(kind){submissions++;reactions[kind]=!reactions[kind];tip(kind);}
+function ackReaction(kind,yes){const path=kind==='like'?'/aweme/v1/web/commit/item/digg/':'/aweme/v1/web/aweme/collect/';fetch(path,{method:'POST',body:new URLSearchParams({aweme_id:'7665228646013364602',type:yes?'1':'0'})});}
+function react(kind){submissions++;reactions[kind]=!reactions[kind];tip(kind);ackReaction(kind,reactions[kind]);}
 function filter(el){for(const e of el.parentElement.querySelectorAll('span'))e.classList.remove('sDNqBVWH');el.classList.add('sDNqBVWH');}
 function makeComposer(){const root=document.createElement('div');root.className='comment-input-inner-container';root.innerHTML='<div class="_x9Gwl7G"><div contenteditable="true" oninput="edited(this)"></div></div><div class="oWdMk9B9"><input type="file" accept="image/png" onchange="attached(this)"><span onclick="at(this)">@</span><span onclick="emoji(this)">☺</span><span class="wchsYBpK" onclick="send(this)">↑</span></div>';return root;}
 function edited(box){const r=box.closest('.comment-input-inner-container');r.querySelector('.wchsYBpK').classList.toggle('jfGCpJo0',!!box.textContent||!!r.querySelector('input').files.length);r.querySelector('.atBox-inner-container')?.remove();if(box.textContent.includes('@Alice')){const list=document.createElement('div');list.className='atBox-inner-container';list.innerHTML='<div id="search_11111" onclick="selectMention(this)"><img src="/avatar"><span class="lgAE_oZa">Alice</span></div>';r.append(list);}}
@@ -47,6 +49,14 @@ document.querySelector('#comment-input-container').append(makeComposer());const 
 func webFixture(t *testing.T) (*WebService, *fixtureBrowser, context.Context) {
 	t.Helper()
 	br, ctx := newFixture(t, webFixtureHTML)
+	br.respond = func(h *rod.Hijack) bool {
+		path := h.Request.URL().Path
+		if path != "/aweme/v1/web/commit/item/digg/" && path != "/aweme/v1/web/aweme/collect/" {
+			return false
+		}
+		h.Response.SetHeader("Content-Type", "application/json").SetBody(`{"status_code":0}`)
+		return true
+	}
 	if err := br.Restore(ctx, []*proto.NetworkCookieParam{{Name: "sessionid", Value: "synthetic-web-test", Domain: ".douyin.com", Path: "/", Secure: true, HTTPOnly: true}}); err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +434,7 @@ func TestWebBrowserStaticReactionTooltips(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = p.Eval(`()=>{window.tip=kind=>{const e=document.getElementById(kind+'-tip');e.hidden=false;e.textContent=kind==='like'?'点赞':'收藏';};window.react=kind=>{submissions++;reactions[kind]=!reactions[kind];const i=kind==='like'?0:2,cell=document.querySelectorAll('.NoBOOMd6>.o2tLobnl')[i],icon=cell.querySelector('.s7K4YLGp');cell.classList.toggle('YY2jg5f8',reactions[kind]);icon.classList.toggle('prpiPAWb',!reactions[kind]);icon.querySelector('path').setAttribute('fill',reactions[kind]?(kind==='like'?'rgb(254,44,85)':'rgb(255,184,2)'):'rgb(255,255,255)');tip(kind);};for(const i of [0,2])document.querySelectorAll('.NoBOOMd6>.o2tLobnl')[i].querySelector('[tabindex]').innerHTML='<div class="s7K4YLGp prpiPAWb"><svg width="30" height="30"><path d="M0 0L25 0L25 25Z" fill="rgb(255,255,255)" fill-opacity="1"/></svg></div>';}`)
+			_, err = p.Eval(`()=>{window.tip=kind=>{const e=document.getElementById(kind+'-tip');e.hidden=false;e.textContent=kind==='like'?'点赞':'收藏';};window.react=kind=>{submissions++;reactions[kind]=!reactions[kind];const i=kind==='like'?0:2,cell=document.querySelectorAll('.NoBOOMd6>.o2tLobnl')[i],icon=cell.querySelector('.s7K4YLGp');cell.classList.toggle('YY2jg5f8',reactions[kind]);icon.classList.toggle('prpiPAWb',!reactions[kind]);icon.querySelector('path').setAttribute('fill',reactions[kind]?(kind==='like'?'rgb(254,44,85)':'rgb(255,184,2)'):'rgb(255,255,255)');tip(kind);ackReaction(kind,reactions[kind]);};for(const i of [0,2])document.querySelectorAll('.NoBOOMd6>.o2tLobnl')[i].querySelector('[tabindex]').innerHTML='<div class="s7K4YLGp prpiPAWb"><svg width="30" height="30"><path d="M0 0L25 0L25 25Z" fill="rgb(255,255,255)" fill-opacity="1"/></svg></div>';}`)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -530,7 +540,7 @@ const info=note.querySelector('[data-e2e="detail-video-info"]');info.removeAttri
 const feed=document.createElement('div');feed.setAttribute('data-e2e','feed-active-video');feed.setAttribute('data-e2e-vid','7665228646013364602');note.append(feed);
 const list=note.querySelector('[data-e2e="comment-list"]');list.hidden=true;
 const noteComposer=note.querySelector('#comment-input-container');const clone=noteComposer.querySelector('.comment-input-inner-container').cloneNode(true);noteComposer.hidden=true;note.append(clone);
-for(const kind of ['digg','collect']){const button=document.createElement('div');button.setAttribute('data-e2e','video-player-'+kind);button.setAttribute('data-e2e-state',kind==='digg'?'video-player-no-digged':'video-player-no-collect');button.textContent='123';button.onclick=()=>{submissions++;const yes=button.getAttribute('data-e2e-state').includes('-no-');button.setAttribute('data-e2e-state',kind==='digg'?(yes?'video-player-is-digged':'video-player-no-digged'):(yes?'video-player-is-collected':'video-player-no-collect'));};note.prepend(button);}
+for(const kind of ['digg','collect']){const button=document.createElement('div');button.setAttribute('data-e2e','video-player-'+kind);button.setAttribute('data-e2e-state',kind==='digg'?'video-player-no-digged':'video-player-no-collect');button.textContent='123';button.onclick=()=>{submissions++;const yes=button.getAttribute('data-e2e-state').includes('-no-');button.setAttribute('data-e2e-state',kind==='digg'?(yes?'video-player-is-digged':'video-player-no-digged'):(yes?'video-player-is-collected':'video-player-no-collect'));ackReaction(kind==='digg'?'like':'favorite',yes);};note.prepend(button);}
 const toggle=document.createElement('div');toggle.setAttribute('data-e2e','feed-comment-icon');toggle.textContent='评论';toggle.onclick=()=>{list.hidden=false;};note.prepend(toggle);
 </script>`
 	post := "https://www.douyin.com/note/7665228646013364602"

@@ -11,7 +11,8 @@ import (
 )
 
 // WebService is used only inside the same serialized executor as publishing.
-// It reads rendered DOM, never private/undocumented network signing APIs.
+// It operates the rendered UI and can passively observe that UI's submission
+// response. It never constructs or replays private network signing requests.
 type WebService struct {
 	browser                           Browser
 	login                             *LoginService
@@ -24,6 +25,7 @@ type WebService struct {
 	mentionRefs                       map[string]mentionTarget
 	emojiRefs                         map[string]emojiTarget
 	active                            *interactionDraft
+	pendingReactions                  map[string]bool // optimistic state on the retained detail page
 }
 
 func NewWebService(br Browser, login *LoginService, mediaRoot, dataDir string) *WebService {
@@ -39,6 +41,7 @@ func (s *WebService) Close() {
 	s.searchKey, s.detailID = "", ""
 	s.searchFilterKey = ""
 	s.searchSubmitted = false
+	s.pendingReactions = nil
 	s.refs = map[string]commentTarget{}
 	s.mentionRefs = map[string]mentionTarget{}
 	s.emojiRefs = map[string]emojiTarget{}
@@ -90,6 +93,7 @@ func checkWebPage(p *rod.Page) error {
 		return problem("unexpected_page", "当前页面不再是抖音官网，已停止操作", 409)
 	}
 	if state.Challenge {
+		browser.ShowManualVerification(p)
 		return problem("needs_attention", "抖音要求人工安全验证，请在专用浏览器完成后重试；未绕过验证", 409)
 	}
 	if state.Login {
@@ -144,6 +148,7 @@ func (s *WebService) CheckLoginStatus(ctx context.Context) (*LoginResult, error)
 		return nil, wrapTimeout(err, "无法判断抖音网页版登录状态，请检查专用浏览器")
 	}
 	if st.Challenge {
+		browser.ShowManualVerification(s.loginPage.Context(ctx))
 		return &LoginResult{Phase: PhaseNeedsAttention, Message: "请在专用浏览器手动完成抖音安全验证"}, nil
 	}
 	items, err := s.browser.Cookies(ctx)
@@ -174,6 +179,7 @@ func (s *WebService) GetLoginQRCode(ctx context.Context) (*LoginResult, error) {
 			return false, err
 		}
 		if st.Challenge {
+			browser.ShowManualVerification(p)
 			return false, problem("needs_attention", "请在专用浏览器手工完成安全验证", 409)
 		}
 		items, err := s.browser.Cookies(ctx)

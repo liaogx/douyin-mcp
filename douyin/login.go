@@ -111,6 +111,7 @@ func (s *LoginService) CheckLoginStatus(ctx context.Context) (*LoginResult, erro
 		return nil, wrapTimeout(err, "无法判断登录状态；页面可能尚未加载或已改版")
 	}
 	if manualBlock(state) {
+		browser.ShowManualVerification(s.page.Context(ctx))
 		return &LoginResult{Phase: PhaseNeedsAttention, Message: "抖音要求人工验证，请在专用浏览器或抖音 App 内处理；程序不会收集或提交验证码"}, nil
 	}
 	if authenticated(state, fingerprint) {
@@ -137,6 +138,7 @@ func (s *LoginService) GetLoginQRCode(ctx context.Context) (*LoginResult, error)
 			return false, err
 		}
 		if manualBlock(state) {
+			browser.ShowManualVerification(page)
 			return false, problem("needs_attention", "抖音要求人工验证，请在专用浏览器或 App 中处理", 409)
 		}
 		items, err := s.browser.Cookies(ctx)

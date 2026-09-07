@@ -23,16 +23,22 @@ import (
 // creator URL and cookie below are synthetic; no Douyin login or post occurs.
 type fixtureBrowser struct {
 	*browser.DouyinBrowser
-	html string
+	html      string
+	respond   func(*rod.Hijack) bool
+	pageCount int
 }
 
 func (b *fixtureBrowser) NewPage(ctx context.Context, target string) (*rod.Page, error) {
+	b.pageCount++
 	p, err := b.DouyinBrowser.NewPage(ctx, "about:blank")
 	if err != nil {
 		return nil, err
 	}
 	router := p.HijackRequests()
 	if err := router.Add("*", "", func(h *rod.Hijack) {
+		if b.respond != nil && b.respond(h) {
+			return
+		}
 		h.Response.SetHeader("Content-Type", "text/html; charset=utf-8").SetBody(b.html)
 	}); err != nil {
 		browser.ClosePage(p)

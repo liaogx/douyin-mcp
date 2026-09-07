@@ -64,6 +64,7 @@ func openUpload(ctx context.Context, page *rod.Page, kind string, paths []string
 			return false, problem("login_required", "上传页要求重新扫码登录", 401)
 		}
 		if manualBlock(state) {
+			browser.ShowManualVerification(page)
 			return false, problem("needs_attention", "上传页要求人工验证", 409)
 		}
 		if !clicked {
@@ -188,6 +189,7 @@ func checkPageFailure(page *rod.Page) error {
 		return problem("login_required", "登录已失效，请重新扫码", 401)
 	}
 	if manualBlock(s) {
+		browser.ShowManualVerification(page)
 		return problem("needs_attention", "抖音要求人工验证，请在专用浏览器或 App 内处理", 409)
 	}
 	// Inspect status UI only, not the user's caption which can contain these words.
