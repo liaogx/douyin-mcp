@@ -77,7 +77,8 @@ func newFixture(t *testing.T, html string) (*fixtureBrowser, context.Context) {
 	if os.Getenv("DY_BROWSER_TESTS") != "1" {
 		t.Skip("set DY_BROWSER_TESTS=1 to run local Chrome fixtures")
 	}
-	br, err := browser.New(configs.BrowserConfig{BinPath: os.Getenv("ROD_BROWSER_BIN"), Headless: true})
+	background := os.Getenv("DY_BACKGROUND_BROWSER_TESTS") == "1"
+	br, err := browser.New(configs.BrowserConfig{BinPath: os.Getenv("ROD_BROWSER_BIN"), Headless: !background, Background: background})
 	if err != nil {
 		t.Fatal(err)
 	}

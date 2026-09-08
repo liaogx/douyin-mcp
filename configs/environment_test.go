@@ -11,7 +11,7 @@ func TestConfigDefaultsAndPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Host != "127.0.0.1" || c.Port != 18070 || c.Headless || c.Stealth || c.NoSandbox {
+	if c.Host != "127.0.0.1" || c.Port != 18070 || c.Headless || !c.Background || c.Stealth || c.NoSandbox {
 		t.Fatalf("unsafe defaults: %+v", c)
 	}
 	env := func(key string) string {
@@ -20,11 +20,13 @@ func TestConfigDefaultsAndPrecedence(t *testing.T) {
 			return "18888"
 		case "DY_HEADLESS":
 			return "true"
+		case "DY_BACKGROUND":
+			return "false"
 		}
 		return ""
 	}
-	c, err = Parse([]string{"--port", "18070", "--headless=false"}, env)
-	if err != nil || c.Port != 18070 || c.Headless {
+	c, err = Parse([]string{"--port", "18070", "--headless=false", "--background=true"}, env)
+	if err != nil || c.Port != 18070 || c.Headless || !c.Background {
 		t.Fatalf("precedence: %+v %v", c, err)
 	}
 }

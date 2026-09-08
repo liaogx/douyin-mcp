@@ -570,6 +570,8 @@ const list=note.querySelector('[data-e2e="comment-list"]');list.hidden=true;
 const noteComposer=note.querySelector('#comment-input-container');const clone=noteComposer.querySelector('.comment-input-inner-container').cloneNode(true);noteComposer.hidden=true;note.append(clone);
 for(const kind of ['digg','collect']){const button=document.createElement('div');button.setAttribute('data-e2e','video-player-'+kind);button.setAttribute('data-e2e-state',kind==='digg'?'video-player-no-digged':'video-player-no-collect');button.textContent='123';button.onclick=()=>{submissions++;const yes=button.getAttribute('data-e2e-state').includes('-no-');button.setAttribute('data-e2e-state',kind==='digg'?(yes?'video-player-is-digged':'video-player-no-digged'):(yes?'video-player-is-collected':'video-player-no-collect'));ackReaction(kind==='digg'?'like':'favorite',yes);};note.prepend(button);}
 const toggle=document.createElement('div');toggle.setAttribute('data-e2e','feed-comment-icon');toggle.textContent='评论';toggle.onclick=()=>{list.hidden=false;};note.prepend(toggle);
+// Model the live SPA exposing a note shell before its reaction controls mount.
+const delayedControls=[...note.querySelectorAll('[data-e2e="video-player-digg"],[data-e2e="video-player-collect"]')];delayedControls.forEach(e=>e.remove());setTimeout(()=>note.prepend(...delayedControls),1200);
 </script>`
 	post := "https://www.douyin.com/note/7665228646013364602"
 	detail, err := s.GetPostDetail(ctx, &PostRequest{Post: post})

@@ -28,6 +28,7 @@ type PublishService struct {
 	login                         *LoginService
 	mediaRoot, dataDir, uploadURL string
 	active                        *draft
+	attentionPage                 *rod.Page
 }
 
 func NewPublishService(br Browser, login *LoginService, mediaRoot, dataDir string) *PublishService {
@@ -35,6 +36,8 @@ func NewPublishService(br Browser, login *LoginService, mediaRoot, dataDir strin
 }
 
 func (s *PublishService) Close() {
+	browser.ClosePage(s.attentionPage)
+	s.attentionPage = nil
 	if s.active != nil {
 		browser.ClosePage(s.active.page)
 		if s.active.media != nil {
@@ -92,7 +95,11 @@ func (s *PublishService) prepare(ctx context.Context, kind string, req *PublishR
 	}
 	defer func() {
 		if !keep {
-			browser.ClosePage(page)
+			if browser.ManualVerificationPending(page) {
+				s.attentionPage = page
+			} else {
+				browser.ClosePage(page)
+			}
 		}
 	}()
 	p := page.Context(ctx)

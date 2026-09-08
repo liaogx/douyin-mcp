@@ -53,10 +53,10 @@ func (s *DouyinService) begin(ctx context.Context) (context.Context, func(), err
 
 func (s *DouyinService) ensure(ctx context.Context) error {
 	if s.browser != nil {
-		return nil
+		return douyin.CheckManualVerification(ctx, s.browser)
 	}
 	c := s.config
-	br, err := browser.New(configs.BrowserConfig{Headless: c.Headless, Stealth: c.Stealth, NoSandbox: c.NoSandbox, BinPath: c.BinPath, Proxy: c.Proxy, UserAgent: c.UserAgent, ProfileDir: filepath.Join(c.DataDir, "browser-profile")})
+	br, err := browser.New(configs.BrowserConfig{Headless: c.Headless, Background: c.Background, Stealth: c.Stealth, NoSandbox: c.NoSandbox, BinPath: c.BinPath, Proxy: c.Proxy, UserAgent: c.UserAgent, ProfileDir: filepath.Join(c.DataDir, "browser-profile")})
 	if err != nil {
 		return err
 	}

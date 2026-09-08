@@ -23,9 +23,8 @@ func boundedElement(el *rod.Element) (*rod.Element, context.CancelFunc) {
 }
 
 func visibleStable(el *rod.Element) error {
-	if err := (proto.PageBringToFront{}).Call(el); err != nil {
-		return err
-	}
+	// Normal input must not activate a desktop window. The launcher disables
+	// background throttling; bounded CDP input does not need OS focus.
 	if err := el.WaitVisible(); err != nil {
 		return err
 	}

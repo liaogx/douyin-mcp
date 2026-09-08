@@ -118,8 +118,12 @@ func (s *LoginService) CheckLoginStatus(ctx context.Context) (*LoginResult, erro
 		if err := s.save(ctx); err != nil {
 			return nil, fmt.Errorf("登录已完成，但凭证保存失败: %w", err)
 		}
+		if err := browser.ResumeBackground(s.page.Context(ctx)); err != nil {
+			return nil, err
+		}
 		return &LoginResult{Phase: PhaseLoggedIn, Success: true, Nickname: state.Nickname, Message: "已登录，凭证已安全写入本地；可关闭并重启本服务验证恢复"}, nil
 	}
+	browser.ShowManualVerification(s.page.Context(ctx))
 	return &LoginResult{Phase: PhaseQRCode, Message: "未登录，请获取二维码并使用抖音 App 扫码，随后再次检查登录状态"}, nil
 }
 
@@ -201,6 +205,7 @@ func (s *LoginService) GetLoginQRCode(ctx context.Context) (*LoginResult, error)
 	}
 	// Screenshot the rendered QR element: works for img, canvas and remote URLs,
 	// and never fetches an arbitrary image URL from the server.
+	browser.ShowManualVerification(page)
 	png, err := browser.ScreenshotPNG(qr)
 	if err != nil {
 		return nil, err

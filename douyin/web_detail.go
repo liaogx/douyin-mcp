@@ -49,15 +49,29 @@ func (s *WebService) openPost(ctx context.Context, raw string) (*rod.Page, strin
 		return nil, "", err
 	}
 	s.detailPage, s.detailID = p, id
+	var stableSince time.Time
 	err = poll(ctx, 350*time.Millisecond, func() (bool, error) {
 		if err := checkWebPage(p.Context(ctx)); err != nil {
 			return false, err
 		}
-		x, err := p.Context(ctx).Eval(`id=>{`+webDOMHelpers+postDOM+`return !!postInfo(id)&&!!postRoot(id);}`, id)
+		x, err := p.Context(ctx).Eval(`id=>{`+webDOMHelpers+postDOM+`
+ const info=postInfo(id),root=postRoot(id);if(!info||!root)return false;
+ // A note shell can expose its author/caption before the real controls
+ // mount, then briefly replace its active feed. Do not return that shell.
+ if(noteRoot(id))return all('[data-e2e="video-player-digg"]',root).length===1&&all('[data-e2e="video-player-collect"]',root).length===1;
+ return all('.NoBOOMd6 > .o2tLobnl',info).length===4;
+}`, id)
 		if err != nil {
 			return false, err
 		}
-		return x.Value.Bool(), nil
+		if !x.Value.Bool() {
+			stableSince = time.Time{}
+			return false, nil
+		}
+		if stableSince.IsZero() {
+			stableSince = time.Now()
+		}
+		return time.Since(stableSince) >= 700*time.Millisecond, nil
 	})
 	return p.Context(ctx), id, wrapTimeout(err, "作品详情未就绪或当前页面布局不受支持；未操作其他作品")
 }

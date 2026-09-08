@@ -16,7 +16,7 @@ import (
 type Config struct {
 	Host, BinPath, Proxy, UserAgent, DataDir, MediaRoot, AuthToken string
 	Port                                                           int
-	Headless, Stealth, NoSandbox                                   bool
+	Headless, Background, Stealth, NoSandbox                       bool
 	OperationTimeout                                               time.Duration
 }
 
@@ -57,6 +57,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	fs.StringVar(&c.DataDir, "data-dir", envString("DY_DATA_DIR", c.DataDir), "Dedicated private state directory")
 	fs.StringVar(&c.MediaRoot, "media-root", envString("DY_MEDIA_ROOT", c.MediaRoot), "Only files under this directory may be uploaded")
 	fs.BoolVar(&c.Headless, "headless", envBool("DY_HEADLESS", false), "Hide the dedicated browser window")
+	fs.BoolVar(&c.Background, "background", envBool("DY_BACKGROUND", true), "Keep dedicated windows minimized until manual login or verification is needed")
 	fs.BoolVar(&c.Stealth, "stealth", envBool("DY_STEALTH", false), "Optional static stealth script; not a captcha bypass")
 	fs.BoolVar(&c.NoSandbox, "no-sandbox", envBool("DY_NO_SANDBOX", false), "Insecure fallback for incompatible container hosts")
 	fs.DurationVar(&c.OperationTimeout, "timeout", c.OperationTimeout, "Maximum operation duration")

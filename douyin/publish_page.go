@@ -61,11 +61,15 @@ func openUpload(ctx context.Context, page *rod.Page, kind string, paths []string
 			return false, err
 		}
 		if state.HasLogin {
+			browser.ShowManualVerification(page)
 			return false, problem("login_required", "上传页要求重新扫码登录", 401)
 		}
 		if manualBlock(state) {
 			browser.ShowManualVerification(page)
 			return false, problem("needs_attention", "上传页要求人工验证", 409)
+		}
+		if err := browser.ResumeBackground(page); err != nil {
+			return false, err
 		}
 		if !clicked {
 			tab, err := textElement(page, labels, `[role="tab"],button,a,span,div`)
@@ -186,11 +190,15 @@ func checkPageFailure(page *rod.Page) error {
 		return err
 	}
 	if s.HasLogin {
+		browser.ShowManualVerification(page)
 		return problem("login_required", "登录已失效，请重新扫码", 401)
 	}
 	if manualBlock(s) {
 		browser.ShowManualVerification(page)
 		return problem("needs_attention", "抖音要求人工验证，请在专用浏览器或 App 内处理", 409)
+	}
+	if err := browser.ResumeBackground(page); err != nil {
+		return err
 	}
 	// Inspect status UI only, not the user's caption which can contain these words.
 	r, err := page.Eval(`() => [...document.querySelectorAll('[role="alert"],[class*="toast"],[class*="error"]')].some(e=>e.getClientRects().length && /上传失败|处理失败|格式不支持|发布失败/.test(e.innerText||''))`)

@@ -108,7 +108,7 @@ func (s *WebService) prepareInteraction(ctx context.Context, kind string, r *Int
 		return nil, err
 	}
 	defer func() {
-		if keep {
+		if keep || browser.ManualVerificationPending(s.detailPage) {
 			return
 		}
 		// A failed preparation can leave text, a picker, or optimistic UI state

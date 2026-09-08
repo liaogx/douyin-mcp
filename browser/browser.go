@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/go-rod/rod"
@@ -23,6 +24,7 @@ type DouyinBrowser struct {
 	launcher      *launcher.Launcher
 	config        configs.BrowserConfig
 	cancel        context.CancelFunc
+	display       *displayPolicy
 }
 
 func FindBrowser(explicit string) (string, error) {
@@ -68,7 +70,8 @@ func New(c configs.BrowserConfig) (*DouyinBrowser, error) {
 			return nil, err
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	display := &displayPolicy{background: c.Background && !c.Headless, headless: c.Headless, attention: map[proto.TargetTargetID]*rod.Page{}}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), displayPolicyKey{}, display))
 	l := launcher.New().Context(ctx).Bin(bin).UserDataDir(profile).Headless(c.Headless).NoSandbox(c.NoSandbox).Leakless(false)
 	if c.Proxy != "" {
 		l.Proxy(c.Proxy)
@@ -81,7 +84,7 @@ func New(c configs.BrowserConfig) (*DouyinBrowser, error) {
 		}
 		return nil, errors.New("专用浏览器启动失败，请检查浏览器路径和沙箱环境")
 	}
-	b := &DouyinBrowser{launcher: l, config: c, cancel: cancel}
+	b := &DouyinBrowser{launcher: l, config: c, cancel: cancel, display: display}
 	b.root = rod.New().Context(ctx).ControlURL(endpoint)
 	if err := b.root.Connect(); err != nil {
 		b.Close()
@@ -126,12 +129,15 @@ func (b *DouyinBrowser) Reset(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("无法清除专用浏览器会话: %w", err)
 		}
+		b.display.mu.Lock()
+		clear(b.display.attention)
+		b.display.mu.Unlock()
 	}
 	s, err := b.root.Context(ctx).Incognito()
 	if err != nil {
 		return err
 	}
-	b.session = s.Context(context.Background())
+	b.session = s.Context(b.root.GetContext())
 	return nil
 }
 
@@ -142,7 +148,7 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 	// A retained tab's event watcher must live as long as the browser, not the
 	// HTTP request that created it. p.Context(background) alone does NOT detach
 	// rod's underlying session watcher from the original request context.
-	targetInfo, err := (proto.TargetCreateTarget{URL: "about:blank", BrowserContextID: b.session.BrowserContextID}).Call(b.session.Context(ctx))
+	targetInfo, err := b.createTarget(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("创建专用标签页失败: %w", err)
 	}
@@ -183,6 +189,19 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 			return nil, err
 		}
 	}
+	if b.display.background {
+		// Verify the browser honored the initial minimized state before loading
+		// an account page. Older browsers must not silently expose a window.
+		bounds, err := p.GetWindow()
+		if err != nil || bounds.WindowState != proto.BrowserWindowStateMinimized {
+			return nil, errors.New("浏览器不支持后台最小化窗口；请更新 Chrome，或显式使用 --background=false")
+		}
+		// Keep DOM focus/input and rendering active without restoring the OS
+		// window. Minimizing alone can suspend interactive application code.
+		if err := (proto.EmulationSetFocusEmulationEnabled{Enabled: true}).Call(p); err != nil {
+			return nil, err
+		}
+	}
 	if err := p.Navigate(target); err != nil {
 		return nil, fmt.Errorf("页面导航失败: %w", err)
 	}
@@ -194,6 +213,32 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 	ok = true
 	return p.Context(context.Background()), nil
 }
+
+func (b *DouyinBrowser) createTarget(ctx context.Context) (*proto.TargetCreateTargetResult, error) {
+	req := proto.TargetCreateTarget{URL: "about:blank", BrowserContextID: b.session.BrowserContextID, Background: b.display.background}
+	if !b.display.background {
+		return req.Call(b.session.Context(ctx))
+	}
+	// windowState is a newer CDP field not present in Rod's generated structs.
+	// Set it at creation, rather than showing a normal window and hiding it later.
+	req.NewWindow = true
+	req.Width, req.Height = intPtr(1440), intPtr(960)
+	params := struct {
+		proto.TargetCreateTarget
+		WindowState string `json:"windowState"`
+	}{req, "minimized"}
+	data, err := b.session.Call(ctx, "", "Target.createTarget", params)
+	if err != nil {
+		return nil, err
+	}
+	var result proto.TargetCreateTargetResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func intPtr(n int) *int { return &n }
 
 func (b *DouyinBrowser) Cookies(ctx context.Context) ([]*proto.NetworkCookie, error) {
 	if b.session == nil {
@@ -214,6 +259,7 @@ func ClosePage(p *rod.Page) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_ = p.Context(ctx).Close()
+	forgetManualVerification(p)
 }
 func (b *DouyinBrowser) Close() error {
 	var err error

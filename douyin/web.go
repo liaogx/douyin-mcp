@@ -97,9 +97,10 @@ func checkWebPage(p *rod.Page) error {
 		return problem("needs_attention", "抖音要求人工安全验证，请在专用浏览器完成后重试；未绕过验证", 409)
 	}
 	if state.Login {
+		browser.ShowManualVerification(p)
 		return problem("login_required", "抖音网页版需要登录，请用 surface:web 获取二维码并检查状态", 401)
 	}
-	return nil
+	return browser.ResumeBackground(p)
 }
 
 func (s *WebService) ensureLoginPage(ctx context.Context) error {
@@ -159,8 +160,12 @@ func (s *WebService) CheckLoginStatus(ctx context.Context) (*LoginResult, error)
 		if err := s.login.save(ctx); err != nil {
 			return nil, err
 		}
+		if err := browser.ResumeBackground(s.loginPage.Context(ctx)); err != nil {
+			return nil, err
+		}
 		return &LoginResult{Phase: PhaseLoggedIn, Success: true, Nickname: st.Nickname, Message: "抖音网页版已登录，凭证已保存；创作者中心发布状态需单独检查"}, nil
 	}
+	browser.ShowManualVerification(s.loginPage.Context(ctx))
 	return &LoginResult{Phase: PhaseQRCode, Message: "抖音网页版未登录，请用 surface:web 获取二维码，扫码后再次检查状态"}, nil
 }
 
@@ -222,6 +227,7 @@ func (s *WebService) GetLoginQRCode(ctx context.Context) (*LoginResult, error) {
 	if err != nil {
 		return nil, wrapTimeout(err, "未找到网页版登录二维码，请查看专用浏览器")
 	}
+	browser.ShowManualVerification(p)
 	png, err := browser.ScreenshotPNG(qr)
 	if err != nil {
 		return nil, err
