@@ -365,6 +365,34 @@ func TestWebBrowserActionsAreSingleAttemptAndPersistent(t *testing.T) {
 	}
 }
 
+func TestWebBrowserFailedCommentPreparationDoesNotReuseComposer(t *testing.T) {
+	s, br, ctx := webFixture(t)
+	post := "7665228646013364602"
+	if _, _, err := s.openPost(ctx, post); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.detailPage.Eval(`()=>document.querySelector('.oWdMk9B9 > span.wchsYBpK')?.remove()`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Interact(ctx, "comment", &InteractionRequest{Post: post, Text: "第一次残留"}); err == nil {
+		t.Fatal("comment preparation unexpectedly succeeded")
+	}
+	if s.detailPage != nil || s.detailID != "" {
+		t.Fatal("failed preparation retained the detail page")
+	}
+
+	preview, err := s.Interact(ctx, "comment", &InteractionRequest{Post: post, Text: "第二次评论"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Text != "第二次评论" {
+		t.Fatalf("stale composer text leaked into preview: %q", preview.Text)
+	}
+	if br.pageCount < 2 {
+		t.Fatal("second preparation did not open a fresh detail page")
+	}
+}
+
 func TestWebBrowserChangedEditorAndUnknownNeverResend(t *testing.T) {
 	for _, kind := range []string{"changed", "unknown"} {
 		t.Run(kind, func(t *testing.T) {

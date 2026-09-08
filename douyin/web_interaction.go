@@ -107,13 +107,15 @@ func (s *WebService) prepareInteraction(ctx context.Context, kind string, r *Int
 	if err != nil {
 		return nil, err
 	}
-	attachmentAttempted := false
 	defer func() {
-		if !keep && attachmentAttempted {
-			browser.ClosePage(s.detailPage)
-			s.detailPage = nil
-			s.detailID = ""
+		if keep {
+			return
 		}
+		// A failed preparation can leave text, a picker, or optimistic UI state
+		// in the retained detail page. Never reuse that page for another action.
+		browser.ClosePage(s.detailPage)
+		s.detailPage = nil
+		s.detailID = ""
 	}()
 	fingerprint, actor, err := s.webIdentity(ctx, p)
 	if err != nil {
@@ -170,6 +172,9 @@ func (s *WebService) prepareInteraction(ctx context.Context, kind string, r *Int
 		if err != nil {
 			return nil, err
 		}
+		if initial.Text != "" || len(initial.Mentions) > 0 {
+			return nil, problem("editor_not_empty", "评论编辑器未能清空，未发送", 409)
+		}
 		if len(initial.Files) > 0 || len(initial.Images) > 0 {
 			return nil, problem("existing_attachment", "编辑器仍有旧图片，请先在专用页面移除或重新打开作品", 409)
 		}
@@ -184,7 +189,6 @@ func (s *WebService) prepareInteraction(ctx context.Context, kind string, r *Int
 			return nil, err
 		}
 		if media != nil {
-			attachmentAttempted = true
 			if err := attachCommentImage(ctx, p, media); err != nil {
 				return nil, err
 			}
