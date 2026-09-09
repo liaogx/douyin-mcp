@@ -44,6 +44,7 @@ func (s *WebService) openSearch(ctx context.Context, r *SearchRequest) (*rod.Pag
 	s.searchPage, s.searchKey = p, key
 	s.searchFilterKey = ""
 	s.searchSubmitted = false
+	s.searchNavigationRetried = false
 	err = s.submitSearch(ctx, p.Context(ctx), r)
 	return p.Context(ctx), err
 }
@@ -77,8 +78,7 @@ func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *Sea
 		if err := browser.InputText(box, request.Query); err != nil {
 			return err
 		}
-		buttons, err := p.ElementsByJS(rod.Eval(`() => {` + webDOMHelpers + `return all('button[data-e2e="searchbar-button"]').filter(e=>text(e)==='搜索');}`))
-		button, err := exactlyOne(buttons, err, "搜索按钮")
+		button, err := searchButton(p)
 		if err != nil {
 			return err
 		}
@@ -89,27 +89,59 @@ func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *Sea
 		// Resuming must wait on it, not discard it or silently resubmit.
 		s.searchSubmitted = true
 	}
-	err := poll(ctx, 250*time.Millisecond, func() (bool, error) {
-		if err := checkWebPage(p.Context(ctx)); err != nil {
+	// A successful human click usually changes the route immediately. On some
+	// SPA/proxy combinations the first trusted click is consumed while the
+	// page is hydrating; mirror the user's visible search-button recovery once
+	// rather than waiting for the full request timeout.
+	if err := s.waitSearchPath(ctx, p, request.Query, 3*time.Second); err != nil {
+		if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil || s.searchNavigationRetried {
+			return wrapTimeout(err, "网页搜索尚未跳转到当前关键词")
+		}
+		s.searchNavigationRetried = true
+		button, retryErr := searchButton(p)
+		if retryErr != nil {
+			return retryErr
+		}
+		if retryErr = browser.Click(button); retryErr != nil {
+			return retryErr
+		}
+		if retryErr = s.waitSearchPath(ctx, p, request.Query, 10*time.Second); retryErr != nil {
+			return wrapTimeout(retryErr, "网页搜索尚未跳转到当前关键词")
+		}
+	}
+	return s.waitSearchResultsAndApplyTab(ctx, p, request)
+}
+
+func searchButton(p *rod.Page) (*rod.Element, error) {
+	buttons, err := p.ElementsByJS(rod.Eval(`() => {` + webDOMHelpers + `return all('button[data-e2e="searchbar-button"]').filter(e=>text(e)==='搜索');}`))
+	return exactlyOne(buttons, err, "搜索按钮")
+}
+
+func (s *WebService) waitSearchPath(ctx context.Context, p *rod.Page, query string, timeout time.Duration) error {
+	limit, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return poll(limit, 250*time.Millisecond, func() (bool, error) {
+		page := p.Context(ctx)
+		if err := checkWebPage(page); err != nil {
 			return false, err
 		}
-		info, err := p.Info()
+		info, err := page.Info()
 		if err != nil {
 			return false, err
 		}
 		u, err := url.Parse(info.URL)
-		if err != nil || !isSearchPath(u.Path, request.Query) {
+		if err != nil || !isSearchPath(u.Path, query) {
 			return false, nil
 		}
-		r, err := p.Eval(`() => !!document.querySelector('#search-toolbar-container')`)
+		r, err := page.Eval(`() => !!document.querySelector('#search-toolbar-container')`)
 		if err != nil {
 			return false, err
 		}
 		return r.Value.Bool(), nil
 	})
-	if err != nil {
-		return wrapTimeout(err, "网页搜索尚未跳转到当前关键词")
-	}
+}
+
+func (s *WebService) waitSearchResultsAndApplyTab(ctx context.Context, p *rod.Page, request *SearchRequest) error {
 	if request.Tab == "video" {
 		info, err := p.Info()
 		if err != nil {
@@ -211,6 +243,7 @@ func (s *WebService) resetSearchSubmission() {
 	// Keep the authenticated page. Re-click the public search button once;
 	// this resets platform filters, which must all be reapplied and verified.
 	s.searchSubmitted = false
+	s.searchNavigationRetried = false
 	s.searchFilterKey = ""
 }
 

@@ -180,6 +180,23 @@ if('` + mode + `'==='challenge'){const d=document.createElement('div');d.id='uc-
 	}
 }
 
+func TestWebBrowserSearchRecoversWhenFirstButtonClickIsConsumed(t *testing.T) {
+	s, br, ctx := webFixture(t)
+	br.html += `<script>
+window.searchClicks=0;
+const button=document.querySelector('[data-e2e="searchbar-button"]'),base=button.onclick;
+button.onclick=function(){searchClicks++;if(searchClicks===1)return;base.call(this);};
+</script>`
+	r, err := s.SearchPosts(ctx, &SearchRequest{Query: "首击恢复测试"})
+	if err != nil || r == nil || len(r.Posts) != 1 {
+		t.Fatalf("button recovery failed: %+v %v", r, err)
+	}
+	count, err := s.searchPage.Context(ctx).Eval(`()=>window.searchClicks`)
+	if err != nil || count.Value.Int() != 2 {
+		t.Fatalf("expected exactly one bounded recovery click, got %v: %v", count, err)
+	}
+}
+
 func TestWebBrowserSearchRecoveryReappliesFilters(t *testing.T) {
 	s, br, ctx := webFixture(t)
 	br.html += `<script>
