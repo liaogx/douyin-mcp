@@ -178,7 +178,10 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 		_, _ = (proto.TargetCloseTarget{TargetID: targetInfo.TargetID}).Call(b.session.Context(cleanup))
 		return nil, err
 	}
-	context.AfterFunc(p.GetContext(), cancelPage)
+	// The CDP watcher must follow the retained page context, not the request
+	// context below. Registering this after p.Context(ctx) would close the tab
+	// as soon as the MCP request returned, defeating page/session reuse.
+	context.AfterFunc(pageCtx, cancelPage)
 	p = p.Context(ctx)
 	ok := false
 	defer func() {

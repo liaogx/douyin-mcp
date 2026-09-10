@@ -251,7 +251,11 @@ func (s *WebService) resetSearchSubmission() {
 const filterDOM = `
 const groupNames=['排序依据','发布时间','视频时长','内容形式','搜索范围'];
 const groupRows=()=>groupNames.flatMap(name=>{
- const labels=all('#search-toolbar-container span,#search-toolbar-container div,[role="tooltip"] span,[role="tooltip"] div').filter(e=>text(e)===name&&!all('span,div',e).some(c=>text(c)===name));
+ // Filter popovers are rendered inside the toolbar on some layouts and in a
+ // body-level portal on others. Group labels are exact and their option row
+ // must still pass the structural checks below, so searching visible semantic
+ // nodes is bounded to controls rather than trusting arbitrary page text.
+ const labels=all('span,div,button,[role="tooltip"],[role="menu"],[role="dialog"],[role="option"],[role="radio"],[role="combobox"]').filter(e=>text(e)===name&&!all('span,div,button',e).some(c=>text(c)===name));
  return labels.flatMap(label=>{
    let row=label.parentElement;
    for(let i=0;i<3&&row;i++,row=row.parentElement){
@@ -291,7 +295,7 @@ func hoverFilterMenu(p *rod.Page) error {
 			return err
 		}
 	}
-	button, err := textElement(p, []string{"筛选"}, `#search-toolbar-container div[tabindex],#search-toolbar-container button,#search-toolbar-container span`)
+	button, err := filterTrigger(p)
 	if err != nil {
 		return err
 	}
@@ -301,6 +305,21 @@ func hoverFilterMenu(p *rod.Page) error {
 	return browser.Hover(button)
 }
 
+func clickFilterMenu(p *rod.Page) error {
+	button, err := filterTrigger(p)
+	if err != nil {
+		return err
+	}
+	if button == nil {
+		return problem("filters_unavailable", "当前页面未提供筛选入口", 409)
+	}
+	return browser.Click(button)
+}
+
+func filterTrigger(p *rod.Page) (*rod.Element, error) {
+	return textElement(p, []string{"筛选"}, `#search-toolbar-container div[tabindex],#search-toolbar-container div,#search-toolbar-container button,#search-toolbar-container span,#search-toolbar-container a,#search-toolbar-container [role="button"],#search-toolbar-container [role="combobox"]`)
+}
+
 func openFilters(ctx context.Context, p *rod.Page) ([]FilterGroup, error) {
 	limit, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -308,6 +327,7 @@ func openFilters(ctx context.Context, p *rod.Page) ([]FilterGroup, error) {
 	var groups []FilterGroup
 	var previous string
 	var stable, lastHover time.Time
+	openAttempts := 0
 	err := poll(limit, 200*time.Millisecond, func() (bool, error) {
 		if err := checkWebPage(p); err != nil {
 			return false, err
@@ -320,9 +340,19 @@ func openFilters(ctx context.Context, p *rod.Page) ([]FilterGroup, error) {
 		if len(groups) == 0 {
 			stable = time.Time{}
 			if lastHover.IsZero() || time.Since(lastHover) >= time.Second {
-				if err := hoverFilterMenu(p); err != nil {
+				var err error
+				// Most layouts open this read-only menu on hover. A newer
+				// layout may expose the same trigger as click-only, so use
+				// one bounded click fallback after two fresh hover attempts.
+				if openAttempts%3 == 2 {
+					err = clickFilterMenu(p)
+				} else {
+					err = hoverFilterMenu(p)
+				}
+				if err != nil {
 					return false, err
 				}
+				openAttempts++
 				lastHover = time.Now()
 			}
 			return false, nil

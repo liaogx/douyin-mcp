@@ -224,6 +224,26 @@ latest.onclick=function(){filterClicks++;filter(this);if(filterClicks===1)result
 	}
 }
 
+func TestWebBrowserFilterMenuFallsBackToClickOnlyTrigger(t *testing.T) {
+	const html = `<!doctype html><meta charset="utf-8"><style>[hidden]{display:none!important}</style>
+<header id="douyin-header"><a href="https://www.douyin.com/user/self"><img alt="local account"></a></header>
+<div id="search-toolbar-container"><input id="searchbar-input"><button data-e2e="searchbar-button" onclick="history.replaceState(null,'','/search/'+encodeURIComponent(document.querySelector('#searchbar-input').value)+'?type=general')">搜索</button><div id="filter-trigger" role="button" onclick="document.querySelector('#filters').hidden=false">筛选</div></div>
+<div id="filters" hidden><div><div>发布时间</div><span class="sDNqBVWH">不限</span><span>一天内</span><span>一周内</span></div>
+<div><div>搜索范围</div><span class="sDNqBVWH">不限</span><span>关注的人</span><span>最近看过</span><span>还未看过</span></div></div>
+<div id="search-result-container"><p>暂无搜索结果</p></div>`
+	br, ctx := newFixture(t, html)
+	s := NewWebService(br, nil, t.TempDir(), t.TempDir())
+	t.Cleanup(s.Close)
+	p, err := s.openSearch(ctx, &SearchRequest{Query: "点击打开筛选"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := openFilters(ctx, p)
+	if err != nil || len(groups) != 2 {
+		t.Fatalf("click-only filter trigger did not open: %v %+v", err, groups)
+	}
+}
+
 func TestWebBrowserSearchReusesPageAcrossQueriesAndFilters(t *testing.T) {
 	s, br, ctx := webFixture(t)
 	br.html += `<script>window.searchClicks=0;
