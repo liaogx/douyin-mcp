@@ -14,6 +14,18 @@ import (
 )
 
 func (s *WebService) openSearch(ctx context.Context, r *SearchRequest) (*rod.Page, error) {
+	return s.openSearchMode(ctx, r, true)
+}
+
+// openSearchForFilters only waits for the authenticated search route and its
+// toolbar. Reading the filter catalog does not require result cards to have
+// rendered, and waiting for cards makes this read-only tool fail on a
+// transient search response before it can report the real filter choices.
+func (s *WebService) openSearchForFilters(ctx context.Context, r *SearchRequest) (*rod.Page, error) {
+	return s.openSearchMode(ctx, r, false)
+}
+
+func (s *WebService) openSearchMode(ctx context.Context, r *SearchRequest, waitResults bool) (*rod.Page, error) {
 	if err := validateSearch(r); err != nil {
 		return nil, err
 	}
@@ -29,7 +41,7 @@ func (s *WebService) openSearch(ctx context.Context, r *SearchRequest) (*rod.Pag
 				s.resetSearchSubmission()
 			}
 			p := s.searchPage.Context(ctx)
-			return p, s.submitSearch(ctx, p, r)
+			return p, s.submitSearch(ctx, p, r, waitResults)
 		}
 	}
 	browser.ClosePage(s.searchPage)
@@ -44,11 +56,12 @@ func (s *WebService) openSearch(ctx context.Context, r *SearchRequest) (*rod.Pag
 	s.searchPage, s.searchKey = p, key
 	s.searchFilterKey = ""
 	s.searchSubmitted = false
-	err = s.submitSearch(ctx, p.Context(ctx), r)
+	s.searchNavigationRetried = false
+	err = s.submitSearch(ctx, p.Context(ctx), r, waitResults)
 	return p.Context(ctx), err
 }
 
-func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *SearchRequest) error {
+func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *SearchRequest, waitResults bool) error {
 	if err := checkWebPage(p); err != nil {
 		return err
 	}
@@ -66,19 +79,10 @@ func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *Sea
 		if err != nil {
 			return wrapTimeout(err, "网页搜索框或搜索按钮未就绪")
 		}
-		inputs, err := p.ElementsByJS(rod.Eval(`() => {` + webDOMHelpers + `return all('input[data-e2e="searchbar-input"],input#searchbar-input');}`))
-		box, err := exactlyOne(inputs, err, "搜索输入框")
-		if err != nil {
+		if err := setSearchQuery(ctx, p, request.Query); err != nil {
 			return err
 		}
-		if err := browser.SelectAllText(box); err != nil {
-			return err
-		}
-		if err := browser.InputText(box, request.Query); err != nil {
-			return err
-		}
-		buttons, err := p.ElementsByJS(rod.Eval(`() => {` + webDOMHelpers + `return all('button[data-e2e="searchbar-button"]').filter(e=>text(e)==='搜索');}`))
-		button, err := exactlyOne(buttons, err, "搜索按钮")
+		button, err := searchButton(p)
 		if err != nil {
 			return err
 		}
@@ -89,27 +93,96 @@ func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *Sea
 		// Resuming must wait on it, not discard it or silently resubmit.
 		s.searchSubmitted = true
 	}
-	err := poll(ctx, 250*time.Millisecond, func() (bool, error) {
-		if err := checkWebPage(p.Context(ctx)); err != nil {
+	// A successful human click usually changes the route immediately. On some
+	// SPA/proxy combinations the first trusted click is consumed while the
+	// page is hydrating; mirror the user's visible search-button recovery once
+	// rather than waiting for the full request timeout.
+	if err := s.waitSearchPath(ctx, p, request.Query, 3*time.Second); err != nil {
+		if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil || s.searchNavigationRetried {
+			return wrapTimeout(err, "网页搜索尚未跳转到当前关键词")
+		}
+		s.searchNavigationRetried = true
+		if retryErr := setSearchQuery(ctx, p, request.Query); retryErr != nil {
+			return retryErr
+		}
+		button, retryErr := searchButton(p)
+		if retryErr != nil {
+			return retryErr
+		}
+		if retryErr = browser.Click(button); retryErr != nil {
+			return retryErr
+		}
+		if retryErr = s.waitSearchPath(ctx, p, request.Query, 10*time.Second); retryErr != nil {
+			return wrapTimeout(retryErr, "网页搜索尚未跳转到当前关键词")
+		}
+	}
+	if !waitResults {
+		return nil
+	}
+	return s.waitSearchResultsAndApplyTab(ctx, p, request)
+}
+
+func searchInput(p *rod.Page) (*rod.Element, error) {
+	inputs, err := p.ElementsByJS(rod.Eval(`() => {` + webDOMHelpers + `return all('input[data-e2e="searchbar-input"],input#searchbar-input');}`))
+	return exactlyOne(inputs, err, "搜索输入框")
+}
+
+func setSearchQuery(ctx context.Context, p *rod.Page, query string) error {
+	box, err := searchInput(p)
+	if err != nil {
+		return err
+	}
+	if err := browser.SelectAllText(box); err != nil {
+		return err
+	}
+	if err := browser.InputText(box, query); err != nil {
+		return err
+	}
+	verify, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	err = poll(verify, 100*time.Millisecond, func() (bool, error) {
+		value, err := p.Context(verify).Eval(`query=>{const el=document.querySelector('input[data-e2e="searchbar-input"],input#searchbar-input');return !!el&&el.value===query;}`, query)
+		if err != nil {
 			return false, err
 		}
-		info, err := p.Info()
+		return value.Value.Bool(), nil
+	})
+	if err != nil {
+		return wrapTimeout(err, "搜索关键词未写入搜索框")
+	}
+	return nil
+}
+
+func searchButton(p *rod.Page) (*rod.Element, error) {
+	buttons, err := p.ElementsByJS(rod.Eval(`() => {` + webDOMHelpers + `return all('button[data-e2e="searchbar-button"]').filter(e=>text(e)==='搜索');}`))
+	return exactlyOne(buttons, err, "搜索按钮")
+}
+
+func (s *WebService) waitSearchPath(ctx context.Context, p *rod.Page, query string, timeout time.Duration) error {
+	limit, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return poll(limit, 250*time.Millisecond, func() (bool, error) {
+		page := p.Context(ctx)
+		if err := checkWebPage(page); err != nil {
+			return false, err
+		}
+		info, err := page.Info()
 		if err != nil {
 			return false, err
 		}
 		u, err := url.Parse(info.URL)
-		if err != nil || !isSearchPath(u.Path, request.Query) {
+		if err != nil || !isSearchPath(u.Path, query) {
 			return false, nil
 		}
-		r, err := p.Eval(`() => !!document.querySelector('#search-toolbar-container')`)
+		r, err := page.Eval(`() => !!document.querySelector('#search-toolbar-container')`)
 		if err != nil {
 			return false, err
 		}
 		return r.Value.Bool(), nil
 	})
-	if err != nil {
-		return wrapTimeout(err, "网页搜索尚未跳转到当前关键词")
-	}
+}
+
+func (s *WebService) waitSearchResultsAndApplyTab(ctx context.Context, p *rod.Page, request *SearchRequest) error {
 	if request.Tab == "video" {
 		info, err := p.Info()
 		if err != nil {
@@ -211,6 +284,7 @@ func (s *WebService) resetSearchSubmission() {
 	// Keep the authenticated page. Re-click the public search button once;
 	// this resets platform filters, which must all be reapplied and verified.
 	s.searchSubmitted = false
+	s.searchNavigationRetried = false
 	s.searchFilterKey = ""
 }
 
@@ -218,7 +292,11 @@ func (s *WebService) resetSearchSubmission() {
 const filterDOM = `
 const groupNames=['排序依据','发布时间','视频时长','内容形式','搜索范围'];
 const groupRows=()=>groupNames.flatMap(name=>{
- const labels=all('#search-toolbar-container span,#search-toolbar-container div,[role="tooltip"] span,[role="tooltip"] div').filter(e=>text(e)===name&&!all('span,div',e).some(c=>text(c)===name));
+ // Filter popovers are rendered inside the toolbar on some layouts and in a
+ // body-level portal on others. Group labels are exact and their option row
+ // must still pass the structural checks below, so searching visible semantic
+ // nodes is bounded to controls rather than trusting arbitrary page text.
+ const labels=all('span,div,button,[role="tooltip"],[role="menu"],[role="dialog"],[role="option"],[role="radio"],[role="combobox"]').filter(e=>text(e)===name&&!all('span,div,button',e).some(c=>text(c)===name));
  return labels.flatMap(label=>{
    let row=label.parentElement;
    for(let i=0;i<3&&row;i++,row=row.parentElement){
@@ -258,7 +336,7 @@ func hoverFilterMenu(p *rod.Page) error {
 			return err
 		}
 	}
-	button, err := textElement(p, []string{"筛选"}, `#search-toolbar-container div[tabindex],#search-toolbar-container button,#search-toolbar-container span`)
+	button, err := filterTrigger(p)
 	if err != nil {
 		return err
 	}
@@ -268,6 +346,21 @@ func hoverFilterMenu(p *rod.Page) error {
 	return browser.Hover(button)
 }
 
+func clickFilterMenu(p *rod.Page) error {
+	button, err := filterTrigger(p)
+	if err != nil {
+		return err
+	}
+	if button == nil {
+		return problem("filters_unavailable", "当前页面未提供筛选入口", 409)
+	}
+	return browser.Click(button)
+}
+
+func filterTrigger(p *rod.Page) (*rod.Element, error) {
+	return textElement(p, []string{"筛选"}, `#search-toolbar-container div[tabindex],#search-toolbar-container div,#search-toolbar-container button,#search-toolbar-container span,#search-toolbar-container a,#search-toolbar-container [role="button"],#search-toolbar-container [role="combobox"]`)
+}
+
 func openFilters(ctx context.Context, p *rod.Page) ([]FilterGroup, error) {
 	limit, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -275,6 +368,7 @@ func openFilters(ctx context.Context, p *rod.Page) ([]FilterGroup, error) {
 	var groups []FilterGroup
 	var previous string
 	var stable, lastHover time.Time
+	openAttempts := 0
 	err := poll(limit, 200*time.Millisecond, func() (bool, error) {
 		if err := checkWebPage(p); err != nil {
 			return false, err
@@ -287,9 +381,19 @@ func openFilters(ctx context.Context, p *rod.Page) ([]FilterGroup, error) {
 		if len(groups) == 0 {
 			stable = time.Time{}
 			if lastHover.IsZero() || time.Since(lastHover) >= time.Second {
-				if err := hoverFilterMenu(p); err != nil {
+				var err error
+				// Most layouts open this read-only menu on hover. A newer
+				// layout may expose the same trigger as click-only, so use
+				// one bounded click fallback after two fresh hover attempts.
+				if openAttempts%3 == 2 {
+					err = clickFilterMenu(p)
+				} else {
+					err = hoverFilterMenu(p)
+				}
+				if err != nil {
 					return false, err
 				}
+				openAttempts++
 				lastHover = time.Now()
 			}
 			return false, nil
@@ -311,10 +415,10 @@ func openFilters(ctx context.Context, p *rod.Page) ([]FilterGroup, error) {
 func (s *WebService) GetSearchFilters(ctx context.Context, r *SearchRequest) (*SearchFiltersResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
-	p, err := s.openSearch(ctx, r)
+	p, err := s.openSearchForFilters(ctx, r)
 	if isSearchServerError(err) && ctx.Err() == nil {
 		s.resetSearchSubmission()
-		p, err = s.openSearch(ctx, r)
+		p, err = s.openSearchForFilters(ctx, r)
 	}
 	if err != nil {
 		return nil, err

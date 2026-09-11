@@ -21,6 +21,7 @@ type WebService struct {
 	searchKey, detailID               string
 	searchFilterKey                   string
 	searchSubmitted                   bool
+	searchNavigationRetried           bool
 	refs                              map[string]commentTarget
 	mentionRefs                       map[string]mentionTarget
 	emojiRefs                         map[string]emojiTarget
@@ -41,6 +42,7 @@ func (s *WebService) Close() {
 	s.searchKey, s.detailID = "", ""
 	s.searchFilterKey = ""
 	s.searchSubmitted = false
+	s.searchNavigationRetried = false
 	s.pendingReactions = nil
 	s.refs = map[string]commentTarget{}
 	s.mentionRefs = map[string]mentionTarget{}

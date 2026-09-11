@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -149,6 +150,12 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 	// HTTP request that created it. p.Context(background) alone does NOT detach
 	// rod's underlying session watcher from the original request context.
 	targetInfo, err := b.createTarget(ctx)
+	if err != nil && isTransientBrowserConnectionError(err) && b.config.ProfileDir != "" {
+		if restartErr := b.restartPersistent(ctx); restartErr != nil {
+			return nil, fmt.Errorf("专用浏览器连接已断开，重启持久化会话失败: %w", restartErr)
+		}
+		targetInfo, err = b.createTarget(ctx)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("创建专用标签页失败: %w", err)
 	}
@@ -171,7 +178,10 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 		_, _ = (proto.TargetCloseTarget{TargetID: targetInfo.TargetID}).Call(b.session.Context(cleanup))
 		return nil, err
 	}
-	context.AfterFunc(p.GetContext(), cancelPage)
+	// The CDP watcher must follow the retained page context, not the request
+	// context below. Registering this after p.Context(ctx) would close the tab
+	// as soon as the MCP request returned, defeating page/session reuse.
+	context.AfterFunc(pageCtx, cancelPage)
 	p = p.Context(ctx)
 	ok := false
 	defer func() {
@@ -202,7 +212,7 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 			return nil, err
 		}
 	}
-	if err := p.Navigate(target); err != nil {
+	if err := navigateWithRetry(ctx, p, target); err != nil {
 		return nil, fmt.Errorf("页面导航失败: %w", err)
 	}
 	// Creator is an SPA; waiting for every third-party image/analytics resource
@@ -212,6 +222,88 @@ func (b *DouyinBrowser) NewPage(ctx context.Context, target string) (*rod.Page, 
 	}
 	ok = true
 	return p.Context(context.Background()), nil
+}
+
+// navigateWithRetry handles transient proxy/browser connection closures at
+// the page-opening boundary. It is deliberately limited to one retry and to
+// transport errors; login, challenge, selector, and submission errors are
+// never retried here.
+func navigateWithRetry(ctx context.Context, p *rod.Page, target string) error {
+	const attemptTimeout = 12 * time.Second
+	var last error
+	for attempt := 0; attempt < 2; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		err := p.Context(attemptCtx).Navigate(target)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		last = err
+		transientTimeout := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+		if attempt == 1 || ctx.Err() != nil || (!isTransientNavigationError(err) && !transientTimeout) {
+			return err
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return last
+}
+
+func isTransientNavigationError(err error) bool {
+	return hasErrorMarker(err,
+		"ERR_CONNECTION_CLOSED",
+		"ERR_CONNECTION_RESET",
+		"ERR_CONNECTION_REFUSED",
+		"ERR_NETWORK_CHANGED",
+		"ERR_TIMED_OUT",
+	)
+}
+
+func isTransientBrowserConnectionError(err error) bool {
+	return isTransientNavigationError(err) || hasErrorMarker(err,
+		"USE OF CLOSED NETWORK CONNECTION",
+		"WEBSOCKET IS CLOSED",
+		"CONNECTION IS CLOSED",
+	)
+}
+
+func hasErrorMarker(err error, markers ...string) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToUpper(err.Error())
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// restartPersistent recreates only the dedicated browser process. The
+// persistent profile is intentionally left on disk, so cookies and the
+// authenticated session can be reused after a transient CDP disconnect.
+func (b *DouyinBrowser) restartPersistent(ctx context.Context) error {
+	if b.config.ProfileDir == "" {
+		return errors.New("临时浏览器会话不支持无损重启")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_ = b.Close()
+	fresh, err := New(b.config)
+	if err != nil {
+		return err
+	}
+	*b = *fresh
+	return nil
 }
 
 func (b *DouyinBrowser) createTarget(ctx context.Context) (*proto.TargetCreateTargetResult, error) {
