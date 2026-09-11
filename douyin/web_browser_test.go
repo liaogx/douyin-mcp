@@ -95,6 +95,33 @@ func TestWebBrowserSearchAndNestedReferences(t *testing.T) {
 	}
 }
 
+func TestGetSearchFiltersDoesNotWaitForResultCards(t *testing.T) {
+	const html = `<!doctype html><meta charset="utf-8"><style>[hidden]{display:none!important} #filters span{display:inline-block;padding:8px}</style>
+<header id="douyin-header"><a href="/user/self"><img alt="local account"></a></header>
+<div id="search-toolbar-container"><input id="searchbar-input"><button data-e2e="searchbar-button" onclick="history.replaceState(null,'','/search/'+encodeURIComponent(document.querySelector('#searchbar-input').value)+'?type=general')">搜索</button><span id="filter-trigger" onmouseenter="openMenu()">筛选</span>
+<div id="filters" hidden>
+<div><div>排序依据</div><span class="sDNqBVWH">综合排序</span><span>最新发布</span><span>最多点赞</span></div>
+<div><div>发布时间</div><span class="sDNqBVWH">不限</span><span>一天内</span><span>一周内</span><span>半年内</span></div>
+<div><div>视频时长</div><span class="sDNqBVWH">不限</span><span>1分钟以下</span><span>1-5分钟</span><span>5分钟以上</span></div>
+<div><div>内容形式</div><span class="sDNqBVWH">不限</span><span>视频</span><span>图文</span></div>
+<div><div>搜索范围</div><span class="sDNqBVWH">不限</span><span>关注的人</span><span>最近看过</span><span>还未看过</span></div>
+</div></div>
+<div id="search-result-container" aria-busy="true"></div>
+<script>function openMenu(){document.querySelector('#filters').hidden=false;}</script>`
+	br, parent := newFixture(t, html)
+	s := NewWebService(br, nil, t.TempDir(), t.TempDir())
+	t.Cleanup(s.Close)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	result, err := s.GetSearchFilters(ctx, &SearchRequest{Query: "筛选先于结果"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Groups) != 5 {
+		t.Fatalf("expected five filter groups while results are still busy, got %+v", result.Groups)
+	}
+}
+
 func TestWebBrowserFilterMenuReopensAfterHydrationAndClicks(t *testing.T) {
 	const html = `<!doctype html><meta charset="utf-8"><style>
 [hidden]{display:none!important} #filters{padding:15px} #filters span{display:inline-block;padding:8px}

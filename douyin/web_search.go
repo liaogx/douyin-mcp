@@ -14,6 +14,18 @@ import (
 )
 
 func (s *WebService) openSearch(ctx context.Context, r *SearchRequest) (*rod.Page, error) {
+	return s.openSearchMode(ctx, r, true)
+}
+
+// openSearchForFilters only waits for the authenticated search route and its
+// toolbar. Reading the filter catalog does not require result cards to have
+// rendered, and waiting for cards makes this read-only tool fail on a
+// transient search response before it can report the real filter choices.
+func (s *WebService) openSearchForFilters(ctx context.Context, r *SearchRequest) (*rod.Page, error) {
+	return s.openSearchMode(ctx, r, false)
+}
+
+func (s *WebService) openSearchMode(ctx context.Context, r *SearchRequest, waitResults bool) (*rod.Page, error) {
 	if err := validateSearch(r); err != nil {
 		return nil, err
 	}
@@ -29,7 +41,7 @@ func (s *WebService) openSearch(ctx context.Context, r *SearchRequest) (*rod.Pag
 				s.resetSearchSubmission()
 			}
 			p := s.searchPage.Context(ctx)
-			return p, s.submitSearch(ctx, p, r)
+			return p, s.submitSearch(ctx, p, r, waitResults)
 		}
 	}
 	browser.ClosePage(s.searchPage)
@@ -45,11 +57,11 @@ func (s *WebService) openSearch(ctx context.Context, r *SearchRequest) (*rod.Pag
 	s.searchFilterKey = ""
 	s.searchSubmitted = false
 	s.searchNavigationRetried = false
-	err = s.submitSearch(ctx, p.Context(ctx), r)
+	err = s.submitSearch(ctx, p.Context(ctx), r, waitResults)
 	return p.Context(ctx), err
 }
 
-func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *SearchRequest) error {
+func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *SearchRequest, waitResults bool) error {
 	if err := checkWebPage(p); err != nil {
 		return err
 	}
@@ -67,15 +79,7 @@ func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *Sea
 		if err != nil {
 			return wrapTimeout(err, "网页搜索框或搜索按钮未就绪")
 		}
-		inputs, err := p.ElementsByJS(rod.Eval(`() => {` + webDOMHelpers + `return all('input[data-e2e="searchbar-input"],input#searchbar-input');}`))
-		box, err := exactlyOne(inputs, err, "搜索输入框")
-		if err != nil {
-			return err
-		}
-		if err := browser.SelectAllText(box); err != nil {
-			return err
-		}
-		if err := browser.InputText(box, request.Query); err != nil {
+		if err := setSearchQuery(ctx, p, request.Query); err != nil {
 			return err
 		}
 		button, err := searchButton(p)
@@ -98,6 +102,9 @@ func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *Sea
 			return wrapTimeout(err, "网页搜索尚未跳转到当前关键词")
 		}
 		s.searchNavigationRetried = true
+		if retryErr := setSearchQuery(ctx, p, request.Query); retryErr != nil {
+			return retryErr
+		}
 		button, retryErr := searchButton(p)
 		if retryErr != nil {
 			return retryErr
@@ -109,7 +116,41 @@ func (s *WebService) submitSearch(ctx context.Context, p *rod.Page, request *Sea
 			return wrapTimeout(retryErr, "网页搜索尚未跳转到当前关键词")
 		}
 	}
+	if !waitResults {
+		return nil
+	}
 	return s.waitSearchResultsAndApplyTab(ctx, p, request)
+}
+
+func searchInput(p *rod.Page) (*rod.Element, error) {
+	inputs, err := p.ElementsByJS(rod.Eval(`() => {` + webDOMHelpers + `return all('input[data-e2e="searchbar-input"],input#searchbar-input');}`))
+	return exactlyOne(inputs, err, "搜索输入框")
+}
+
+func setSearchQuery(ctx context.Context, p *rod.Page, query string) error {
+	box, err := searchInput(p)
+	if err != nil {
+		return err
+	}
+	if err := browser.SelectAllText(box); err != nil {
+		return err
+	}
+	if err := browser.InputText(box, query); err != nil {
+		return err
+	}
+	verify, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	err = poll(verify, 100*time.Millisecond, func() (bool, error) {
+		value, err := p.Context(verify).Eval(`query=>{const el=document.querySelector('input[data-e2e="searchbar-input"],input#searchbar-input');return !!el&&el.value===query;}`, query)
+		if err != nil {
+			return false, err
+		}
+		return value.Value.Bool(), nil
+	})
+	if err != nil {
+		return wrapTimeout(err, "搜索关键词未写入搜索框")
+	}
+	return nil
 }
 
 func searchButton(p *rod.Page) (*rod.Element, error) {
@@ -374,10 +415,10 @@ func openFilters(ctx context.Context, p *rod.Page) ([]FilterGroup, error) {
 func (s *WebService) GetSearchFilters(ctx context.Context, r *SearchRequest) (*SearchFiltersResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
-	p, err := s.openSearch(ctx, r)
+	p, err := s.openSearchForFilters(ctx, r)
 	if isSearchServerError(err) && ctx.Err() == nil {
 		s.resetSearchSubmission()
-		p, err = s.openSearch(ctx, r)
+		p, err = s.openSearchForFilters(ctx, r)
 	}
 	if err != nil {
 		return nil, err
